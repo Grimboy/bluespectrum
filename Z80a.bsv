@@ -1,5 +1,6 @@
 package Z80a;
 
+import FShow::*;
 import FIFO::*;
 import FIFOF::*;
 import GetPut::*;
@@ -143,6 +144,10 @@ module mkZ80a(Z80a_ifc);
         res <= data_tri;
         mem_cycle <= 0;
         sub_cycle <= 0;
+    endrule
+
+    rule trace_decoded_instruction(mem_cycle == 0 && sub_cycle == 3);
+        $display(fshow(decoded));
     endrule
 
     rule trace_regs;

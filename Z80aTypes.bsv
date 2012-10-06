@@ -1,5 +1,7 @@
 package Z80aTypes;
 
+import FShow::*;
+
 typedef enum {
     RgB, RgC, RgD, RgE, RgH, RgL
 } Reg8T deriving (Bits, Eq, Bounded);
@@ -55,6 +57,127 @@ typedef struct {
   IncompleteInstructionT incomp;
 } DecodedInstructionT deriving (Bits, Eq, Bounded);
 
+instance FShow#(IncompleteInstructionT);
+    function Fmt fshow (IncompleteInstructionT incomp);
+        case(incomp)
+            IncNo: return $format("IncNo");
+            IncExtd: return $format("IncExtd");
+            IncBits: return $format("IncBits");
+            IncIx: return $format("IncIx");
+            IncIxBits: return $format("IncIxBits");
+            IncIy: return $format("IncIy");
+            IncIyBits: return $format("IncIyBits");
+        endcase
+    endfunction
+endinstance
+
+instance FShow#(InternalOpTypeT);
+    function Fmt fshow (InternalOpTypeT op);
+        case(op) matches
+            OpNop: return $format("OpNop");
+            OpHalt: return $format("OpHalt");
+            OpLd: return $format("OpLd");
+            OpInc: return $format("OpInc");
+            OpDec: return $format("OpDec");
+            OpAdd: return $format("OpAdd");
+            OpAdc: return $format("OpAdc");
+            OpSub: return $format("OpSub");
+            OpSbc: return $format("OpSbc");
+            OpCp: return $format("OpCp");
+            OpAnd: return $format("OpAnd");
+            OpOr: return $format("OpOr");
+            OpXor: return $format("OpXor");
+            OpAdd16: return $format("OpAdd16");
+            OpRlca: return $format("OpRlca");
+            OpRla: return $format("OpRla");
+            OpDaa: return $format("OpDaa");
+            OpScf: return $format("OpScf");
+            OpRrca: return $format("OpRrca");
+            OpRra: return $format("OpRra");
+            OpCpl: return $format("OpCpl");
+            OpCcf: return $format("OpCcf");
+        endcase
+    endfunction
+endinstance
+
+instance FShow#(Reg8T);
+    function Fmt fshow (Reg8T reg8);
+        case(reg8) matches
+            RgB: return $format("RgB");
+            RgC: return $format("RgC");
+            RgD: return $format("RgD");
+            RgE: return $format("RgE");
+            RgH: return $format("RgH");
+            RgL: return $format("RgL");
+        endcase
+    endfunction
+endinstance
+
+instance FShow#(Reg16T);
+    function Fmt fshow (Reg16T reg16);
+        case(reg16)
+            RgBC: return $format("RgBC");
+            RgDE: return $format("RgDE");
+            RgHL: return $format("RgHL");
+            RgSP: return $format("RgSP");
+            RgAF: return $format("RgAF");
+        endcase
+    endfunction
+endinstance
+
+instance FShow#(DirectOperandT);
+    function Fmt fshow (DirectOperandT dir);
+        case(dir) matches
+            tagged DOAcc:
+                return $format("Acc");
+            tagged DOReg8 .reg8:
+                return $format("Reg8: ") + fshow(reg8);
+            tagged DOReg16 .reg16:
+                return $format("Reg16: ") + fshow(reg16);
+            tagged DONext8Bits:
+                return $format("Next8Bits");
+            tagged DONext16Bits:
+                return $format("Next16Bits");
+        endcase
+    endfunction
+endinstance
+
+instance FShow#(IndirectOperandT);
+    function Fmt fshow (IndirectOperandT indir);
+        case(indir) matches
+            tagged IOReg16 .reg16:
+                return $format("Reg16: ") + fshow(reg16);
+            tagged IONext16Bits:
+                return $format("Next16Bits");
+        endcase
+    endfunction
+endinstance
+
+instance FShow#(DecodedOperandT);
+    function Fmt fshow (DecodedOperandT dec);
+        case(dec) matches
+            tagged DirectOperand .do_:
+                return $format("<DirectOperand ") + fshow(do_) + $format(">");
+            tagged IndirectOperand .io:
+                return $format("<IndirectOperand ") + fshow(io) + $format(">");
+            tagged NoOperand:
+                return $format("<NoOperand>");
+        endcase
+    endfunction
+endinstance
+
+instance FShow#(DecodedInstructionT);
+    function Fmt fshow (DecodedInstructionT inst);
+        return ($format("<DecodedInstruction") +
+            $format("\n op: ") + fshow(inst.op) +
+            $format("\n dest: ") + fshow(inst.dest) +
+            $format("\n src1: ") + fshow(inst.src1) +
+            $format("\n src2: ") + fshow(inst.src2) +
+            $format("\n incomp: ") + fshow(inst.incomp) +
+            $format(">"));
+    endfunction
+endinstance
+
 DecodedOperandT tab_r[8] = {
     tagged DirectOperand (tagged DOReg8 RgB),
     tagged DirectOperand (tagged DOReg8 RgC),
@@ -66,11 +189,11 @@ DecodedOperandT tab_r[8] = {
     tagged DirectOperand DOAcc
 };
 
-Reg16T tab_rp[8] = {
+Reg16T tab_rp[4] = {
     RgBC, RgDE, RgHL, RgSP
 };
 
-Reg16T tab_rp2[8] = {
+Reg16T tab_rp2[4] = {
     RgBC, RgDE, RgHL, RgAF
 };
 

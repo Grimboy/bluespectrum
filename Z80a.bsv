@@ -91,9 +91,7 @@ module mkZ80a #(parameter Bool no_exec) (Z80a_ifc);
     Reg#(Bit#(16)) pc <- mkReg(0);
     Reg#(Bit#(8)) displacement <- mkRegU;
     Reg#(Bit#(8)) instr_b1 <- mkRegU;
-    Reg#(Bit#(8)) acc <- mkReg(0);
     Reg#(Bit#(8)) res <- mkRegU;
-    Reg#(StatusRegT) status <- mkRegU;
     RegisterFileIfc rf <- mkRegisterFile;
 
     // Decoded
@@ -124,7 +122,7 @@ module mkZ80a #(parameter Bool no_exec) (Z80a_ifc);
         n_m1_out <= 1;
     endrule
 
-    rule m1t1_pc_out(!if_done && sub_cycle == 0);
+    rule m1_pc_out(!if_done && sub_cycle == 0);
         addr_out <= pc;
         n_mreq_out <= 0; // XXX: Should be on following negative clk edge
         n_rd_out <= 0; // XXX: "
@@ -132,11 +130,11 @@ module mkZ80a #(parameter Bool no_exec) (Z80a_ifc);
         pc <= pc + 1;
     endrule
 
-    rule m1t2n_wait(!if_done && sub_cycle == 1 && (n_wait_in > 0));
+    rule m1_n_wait(!if_done && sub_cycle == 1 && (n_wait_in > 0));
         sub_cycle <= sub_cycle + 1;
     endrule
 
-    rule m1t3_decode(!if_done && sub_cycle == 2);
+    rule m1_decode(!if_done && sub_cycle == 2);
         // TODO: DRAM Refresh
         if (need_displacement) begin
             displacement <= data_tri;
@@ -163,51 +161,42 @@ module mkZ80a #(parameter Bool no_exec) (Z80a_ifc);
     endrule
     */
 
-    rule m1t4_ldgetreg(if_done && sub_cycle == 0 && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DOReg8 .r));
+    rule ld8_getreg(if_done && sub_cycle == 0 && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DOReg8 .r));
         res <= rf.read_8b(r);
         next_instruction();
     endrule
 
-    rule m1t4_ldgetacc(if_done && sub_cycle == 0 && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DOAcc));
-        res <= acc;
-        next_instruction();
-    endrule
-
-    rule m1t1_ldputreg(is_m1 && sub_cycle == 0 && decoded.op == OpLd &&& decoded.dest matches tagged DirectOperand (tagged DOReg8 .r));
+    rule ld8_putreg(is_m1 && sub_cycle == 0 && decoded.op == OpLd &&& decoded.dest matches tagged DirectOperand (tagged DOReg8 .r));
         rf.write_8b(r, res);
     endrule
 
-    rule m1t1_ldputacc(is_m1 && sub_cycle == 0 && decoded.op == OpLd &&& decoded.dest matches tagged DirectOperand (tagged DOAcc));
-        acc <= res;
-    endrule
-
     rule add1(if_done && sub_cycle == 0 && decoded.op == OpAdd
-      &&& decoded.src1 matches tagged DirectOperand (tagged DOAcc)
-      &&& decoded.src2 matches tagged DirectOperand (tagged DOReg8 .r));
-        alu.request.put(ALUReqT{in1: acc[3:0], in2: rf.read_8b(r)[3:0], carry_in: False, is_sub: False});
+      &&& decoded.src1 matches tagged DirectOperand (tagged DOReg8 .r1)
+      &&& decoded.src2 matches tagged DirectOperand (tagged DOReg8 .r2));
+        alu.request.put(ALUReqT{in1: rf.read_4b(r1, False), in2: rf.read_4b(r2, False), carry_in: False, is_sub: False});
         next_instruction();
     endrule
 
     rule add2(is_m1 && sub_cycle == 0 && decoded.op == OpAdd
-      &&& decoded.src1 matches tagged DirectOperand (tagged DOAcc)
-      &&& decoded.src2 matches tagged DirectOperand (tagged DOReg8 .r));
+      &&& decoded.src1 matches tagged DirectOperand (tagged DOReg8 .r1)
+      &&& decoded.src2 matches tagged DirectOperand (tagged DOReg8 .r2));
         ALURespT resp <- alu.response.get();
-        alu.request.put(ALUReqT{in1: acc[7:4], in2: rf.read_8b(r)[7:4], carry_in: resp.carry_out, is_sub: False});
-        acc[3:0] <= resp.out;
+        alu.request.put(ALUReqT{in1: rf.read_4b(r1, True), in2: rf.read_4b(r2, True), carry_in: resp.carry_out, is_sub: False});
+        rf.write_4b(r1, False, resp.out);
     endrule
 
     rule add3(is_m1 && sub_cycle == 1 && decoded.op == OpAdd
-      &&& decoded.src1 matches tagged DirectOperand (tagged DOAcc)
-      &&& decoded.src2 matches tagged DirectOperand (tagged DOReg8 .r));
+      &&& decoded.src1 matches tagged DirectOperand (tagged DOReg8 .r1)
+      &&& decoded.src2 matches tagged DirectOperand (tagged DOReg8 .r2));
         ALURespT resp <- alu.response.get();
-        acc[7:4] <= resp.out;
+        rf.write_4b(r1, True, resp.out);
     endrule
 
     rule halt(if_done && sub_cycle == 0 && decoded.op == OpHalt);
         $finish();
     endrule
 
-    rule m2t1_ldimmgetnextbyte(if_done && sub_cycle == 0 && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DONext8Bits));
+    rule ldimmgetnextbyte(if_done && sub_cycle == 0 && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DONext8Bits));
         addr_out <= pc;
         n_mreq_out <= 0; // XXX: Should be on following negative clk edge
         n_rd_out <= 0; // XXX: "
@@ -215,11 +204,11 @@ module mkZ80a #(parameter Bool no_exec) (Z80a_ifc);
         pc <= pc + 1;
     endrule
 
-    rule m2t2_ldimmwait(if_done && sub_cycle == 1 && (n_wait_in > 0) && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DONext8Bits));
+    rule ldimmwait(if_done && sub_cycle == 1 && (n_wait_in > 0) && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DONext8Bits));
         sub_cycle <= sub_cycle + 1;
     endrule
 
-    rule m2t3_ldimmread(if_done && sub_cycle == 2 && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DONext8Bits));
+    rule ldimmread(if_done && sub_cycle == 2 && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DONext8Bits));
         res <= data_tri;
         next_instruction();
     endrule
@@ -229,12 +218,15 @@ module mkZ80a #(parameter Bool no_exec) (Z80a_ifc);
     endrule
 
     rule trace_regs;
-        $display("pc: %h m: %h s: %h i: %h a: %h res: %h",
-            pc, mem_cycle, sub_cycle, instr_b1, acc, res);
-        $display("b: %h c: %h d: %h e: %h h: %h l: %h",
+        $display("pc: %h m: %h s: %h i: %h res: %h",
+            pc, mem_cycle, sub_cycle, instr_b1, res);
+        $display("a: %h f: %h b: %h c: %h d: %h e: %h h: %h l: %h w: %h z: %h s: %h p: %h",
+            rf.read_8b(RgA), rf.read_8b(RgF),
             rf.read_8b(RgB), rf.read_8b(RgC),
             rf.read_8b(RgD), rf.read_8b(RgE),
-            rf.read_8b(RgH), rf.read_8b(RgL));
+            rf.read_8b(RgH), rf.read_8b(RgL),
+            rf.read_8b(RgW), rf.read_8b(RgZ),
+            rf.read_8b(RgS), rf.read_8b(RgP));
     endrule
 
     rule trace_wires;
@@ -313,8 +305,8 @@ module mkALU(ALU_ifc);
             Bool is_sub = req.is_sub;
             Bit#(5) res = in1 + (is_sub ? -in2 : in2) + carry_in;
             ALURespT resp = ALURespT{carry_out: res[4] > 0, out: res[3:0]};
-            $display("REQ in1: %h, in2: %h, carry_in: %h, is_sub: %h", in1, in2, carry_in, is_sub ? 1 : 0);
-            $display("RESP carry_out: %h, out: %h", resp.carry_out ? 1 : 0, resp.out);
+            $display("ALU REQ in1: %h, in2: %h, carry_in: %h, is_sub: %h", in1, in2, carry_in, is_sub ? 1 : 0);
+            $display("ALU RESP carry_out: %h, out: %h", resp.carry_out ? 1 : 0, resp.out);
             f_out.enq(resp);
         endmethod
     endinterface
@@ -322,6 +314,8 @@ module mkALU(ALU_ifc);
 endmodule
 
 interface RegisterFileIfc;
+    method Action write_4b(Reg8T regg, Bool high, Bit#(4) data);
+    method Bit#(4) read_4b(Reg8T regg, Bool high);
     method Action write_8b(Reg8T regg, Bit#(8) data);
     method Bit#(8) read_8b(Reg8T regg);
     method Action write_16b(Reg16T regg, Bit#(16) data);
@@ -331,6 +325,14 @@ endinterface
 module mkRegisterFile(RegisterFileIfc); // Use RegFile module?
     Vector#(TExp#(SizeOf#(Reg8T)), Reg#(Bit#(8))) rf <- replicateM(mkReg(0));
     Reg#(Bool) is_shadow <- mkReg(False); // XXX: Might be bad idea because shadow registers are switched in two stages.
+
+    method Action write_4b(Reg8T regg, Bool high, Bit#(4) data);
+        rf[pack(regg)][(high ? 7 : 3):(high ? 4 : 0)] <= data;
+    endmethod 
+
+    method Bit#(4) read_4b(Reg8T regg, Bool high);
+        return rf[pack(regg)][(high ? 7 : 3):(high ? 4 : 0)];
+    endmethod 
 
     method Action write_8b(Reg8T regg, Bit#(8) data);
         rf[pack(regg)] <= data;

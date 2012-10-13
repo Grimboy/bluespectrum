@@ -4,13 +4,14 @@ import FShow::*;
 import Reserved::*;
 
 typedef enum {
-    RgB, RgC, RgD, RgE,
-    RgH, RgL, RgW, RgZ
+    RgA, RgF, RgB, RgC,
+    RgD, RgE, RgH, RgL,
+    RgW, RgZ, RgS, RgP
 } Reg8T deriving (Bits, Eq, Bounded);
 
 typedef enum {
-    RgBC, RgDE, RgHL,
-    RgSP, RgAF, RgWZ
+    RgAF, RgBC, RgDE, RgHL,
+    RgWZ, RgSP
 } Reg16T deriving (Bits, Eq, Bounded);
 
 typedef enum {
@@ -20,7 +21,7 @@ typedef enum {
 typedef enum {
     OpNop, OpHalt,
     OpLd,
-    OpInc, OpDec, 
+    OpInc, OpDec, OpInc16, OpDec16, 
     OpAdd, OpAdc, OpSub, OpSbc, OpCp, OpAnd, OpOr, OpXor,
     OpAdd16,
 
@@ -32,7 +33,6 @@ typedef enum {
 } IncompleteInstructionT deriving (Bits, Eq, Bounded);
 
 typedef union tagged {
-    void DOAcc;
     Reg8T DOReg8;
     Reg16T DOReg16;
     void DONext8Bits;
@@ -135,6 +135,8 @@ instance FShow#(Reg8T);
             RgE: return $format("RgE");
             RgH: return $format("RgH");
             RgL: return $format("RgL");
+            RgA: return $format("RgA");
+            RgF: return $format("RgF");
         endcase
     endfunction
 endinstance
@@ -154,8 +156,6 @@ endinstance
 instance FShow#(DirectOperandT);
     function Fmt fshow (DirectOperandT dir);
         case(dir) matches
-            tagged DOAcc:
-                return $format("Acc");
             tagged DOReg8 .reg8:
                 return $format("Reg8: ") + fshow(reg8);
             tagged DOReg16 .reg16:
@@ -213,7 +213,7 @@ DecodedOperandT tab_r[8] = {
     tagged DirectOperand (tagged DOReg8 RgH),
     tagged DirectOperand (tagged DOReg8 RgL),
     tagged IndirectOperand (tagged IOReg16 RgHL),
-    tagged DirectOperand DOAcc
+    tagged DirectOperand (tagged DOReg8 RgA)
 };
 
 Reg16T tab_rp[4] = {
@@ -281,11 +281,11 @@ function DecodedInstructionT decode_simple(Bit#(8) inst, IncompleteInstructionT 
                     endcase
                 endcase
                 3: case(q)
-                    0: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // INC rp[p]
-                    1: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // DEC rp[p]
+                    0: return DecodedInstructionT{op: OpInc16, dest: tagged DirectOperand (tagged DOReg8 tab_rp[p]), src1: tagged DirectOperand (tagged DOReg8 tab_rp[p]), src2: tagged NoOperand, displacement: False, incomp: IncNo}; // INC rp[p]
+                    1: return DecodedInstructionT{op: OpDec16, dest: tagged DirectOperand (tagged DOReg8 tab_rp[p]), src1: tagged DirectOperand (tagged DOReg8 tab_rp[p]), src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // DEC rp[p]
                 endcase
-                4: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // INC r[y]
-                5: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // DEC r[y]
+                4: return DecodedInstructionT{op: OpInc, dest: tab_r[y], src1: tab_r[y], src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // INC r[y]
+                5: return DecodedInstructionT{op: OpDec, dest: tab_r[y], src1: tab_r[y], src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // DEC r[y]
                 6: return DecodedInstructionT{op: OpLd, dest: tab_r[y], src1: tagged DirectOperand tagged DONext8Bits, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // LD r[y], n
                 7: case(y)
                     0: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RLCA
@@ -303,7 +303,7 @@ function DecodedInstructionT decode_simple(Bit#(8) inst, IncompleteInstructionT 
             else
                 return DecodedInstructionT{op: OpLd, dest: tab_r[y], src1: tab_r[z], src2: tagged NoOperand, displacement: False, incomp: IncNo}; // LD r[y], r[z]
             2: begin 
-                return DecodedInstructionT{op: tab_alu[y], dest: tagged DirectOperand DOAcc, src1: tagged DirectOperand DOAcc, src2: tab_r[z], displacement: False, incomp: IncNo}; // alu[y] r[z]
+                return DecodedInstructionT{op: tab_alu[y], dest: tagged DirectOperand (tagged DOReg8 RgA), src1: tagged DirectOperand (tagged DOReg8 RgA), src2: tab_r[z], displacement: False, incomp: IncNo}; // alu[y] r[z]
             end
             3: case(z)
                 0: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RET cc[y]
@@ -337,7 +337,7 @@ function DecodedInstructionT decode_simple(Bit#(8) inst, IncompleteInstructionT 
                         3: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncIy}; // (FD prefix)
                     endcase
                 endcase
-                6: return DecodedInstructionT{op: tab_alu[y], dest: tagged DirectOperand DOAcc, src1: tagged DirectOperand DOAcc, src2: tagged DirectOperand tagged DONext8Bits, displacement: False, incomp: IncNo}; // alu[y] n
+                6: return DecodedInstructionT{op: tab_alu[y], dest: tagged DirectOperand (tagged DOReg8 RgA), src1: tagged DirectOperand (tagged DOReg8 RgA), src2: tagged DirectOperand tagged DONext8Bits, displacement: False, incomp: IncNo}; // alu[y] n
                 7: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RST y*8
             endcase
         endcase

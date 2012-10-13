@@ -1,0 +1,3 @@
+sdasz80 -o $1.rel $1.asm
+sdldz80 -i $1.ihx $1.rel
+python3 ihx2rmh.py $1.ihx 16k

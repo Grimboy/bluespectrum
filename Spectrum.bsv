@@ -7,7 +7,7 @@ import Z80a::*;
 (* synthesize *)
 module mkSpectrum(Empty);
     MN23128_ifc rom <- mkMN23128;
-    Z80a_ifc cpu <- mkZ80a;
+    Z80a_ifc cpu <- mkZ80a(False);
     Bit#(16) cpu_addr = cpu.addr();
 
     mkConnection(cpu.data, rom.data);

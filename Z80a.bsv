@@ -12,6 +12,22 @@ import ConfigReg::*;
 
 // Next milestone: Z80 can execute LD reg, literal; LD reg, reg and ADD reg instructions loaded from ROM
 
+module mkDLWireU(Wire#(element_type))
+    provisos (Bits#(element_type, element_width));
+
+    ConfigReg#(element_type) storage <- mkConfigRegU;
+    Wire#(element_type) internal_wire <- mkDWire(storage);
+
+    method Action _write(element_type x1);
+        storage <= x1;
+        internal_wire <= x1;
+    endmethod
+
+    method element_type _read();
+        return internal_wire;
+    endmethod
+endmodule
+
 (* always_ready, always_enabled *)
 interface Z80a_ifc;
     // system control
@@ -40,24 +56,11 @@ interface Z80a_ifc;
     interface Inout#(Bit#(8)) data;
 endinterface
 
-module mkDLWireU(Wire#(element_type))
-    provisos (Bits#(element_type, element_width));
-
-    ConfigReg#(element_type) storage <- mkConfigRegU;
-    Wire#(element_type) internal_wire <- mkDWire(storage);
-
-    method Action _write(element_type x1);
-        storage <= x1;
-        internal_wire <= x1;
-    endmethod
-
-    method element_type _read();
-        return internal_wire;
-    endmethod
-endmodule
-
 (* synthesize *)
-module mkZ80a(Z80a_ifc);
+module mkZ80a #(parameter Bool no_exec) (Z80a_ifc);
+    // Submodules
+    ALU_ifc alu <- mkALU;
+
     // Input/Output Wires
     Wire#(Bit#(1)) n_m1_out <- mkDLWireU;
     Wire#(Bit#(1)) n_mreq_out <- mkDLWireU;
@@ -73,62 +76,138 @@ module mkZ80a(Z80a_ifc);
     Reg#(UInt#(3)) mem_cycle <- mkReg(0);
     Reg#(UInt#(3)) sub_cycle <- mkReg(0);
 
+    Reg#(UInt#(3)) bytes_read <- mkReg(0);
+    Reg#(Bool) need_displacement <- mkReg(False);
+    Reg#(Bool) decoding_done <- mkReg(False);
+    Reg#(Bool) displacement_done <- mkReg(False);
+    Bool if_done = decoding_done && (displacement_done || !need_displacement);
+    Bool is_m1 = !decoding_done && (bytes_read == 0);
+    Reg#(Bool) op1_done <- mkReg(False);
+    Reg#(Bool) op2_done <- mkReg(False);
+    Reg#(Bool) alu_done <- mkReg(False);
+    Reg#(Bool) written_back <- mkReg(False);
+
     // Registery registers
     Reg#(Bit#(16)) pc <- mkReg(0);
+    Reg#(Bit#(8)) displacement <- mkRegU;
     Reg#(Bit#(8)) instr_b1 <- mkRegU;
     Reg#(Bit#(8)) acc <- mkReg(0);
     Reg#(Bit#(8)) res <- mkRegU;
+    Reg#(StatusRegT) status <- mkRegU;
     RegisterFileIfc rf <- mkRegisterFile;
 
     // Decoded
     Reg#(DecodedInstructionT) decoded <- mkRegU;
 
-    rule m1t1_pc_out(mem_cycle == 0 && sub_cycle == 0);
-        addr_out <= pc;
+    function Action next_instruction();
+        return (action
+            $display("---Instruction Start---");
+            mem_cycle <= 0;
+            sub_cycle <= 0;
+            bytes_read <= 0;
+            need_displacement <= False;
+            decoding_done <= False;
+            displacement_done <= False;
+            op1_done <= False;
+            op2_done <= False;
+            alu_done <= False;
+            written_back <= False;
+        endaction);
+    endfunction
+
+
+    rule m1_out_start(is_m1 && sub_cycle == 0);
         n_m1_out <= 0;
+    endrule
+
+    rule m1_out_end(is_m1 && sub_cycle == 2);
+        n_m1_out <= 1;
+    endrule
+
+    rule m1t1_pc_out(!if_done && sub_cycle == 0);
+        addr_out <= pc;
         n_mreq_out <= 0; // XXX: Should be on following negative clk edge
         n_rd_out <= 0; // XXX: "
         sub_cycle <= sub_cycle + 1;
         pc <= pc + 1;
     endrule
 
-    rule m1t2n_wait(mem_cycle == 0 && sub_cycle == 1 && (n_wait_in > 0));
+    rule m1t2n_wait(!if_done && sub_cycle == 1 && (n_wait_in > 0));
         sub_cycle <= sub_cycle + 1;
     endrule
 
-    rule m1t3_decode(mem_cycle == 0 && sub_cycle == 2);
+    rule m1t3_decode(!if_done && sub_cycle == 2);
         // TODO: DRAM Refresh
-        instr_b1 <= data_tri;
-        decoded <= decode_simple(data_tri);
+        if (need_displacement) begin
+            displacement <= data_tri;
+            displacement_done <= True;
+        end else begin
+            instr_b1 <= data_tri;
+            DecodedInstructionT d = decode_simple(data_tri, bytes_read == 0 ? IncNo : decoded.incomp);
+            decoded <= d;
+            decoding_done <= d.incomp == IncNo;
+            need_displacement <= d.displacement;
+        end
+        bytes_read <= bytes_read + 1;
         n_mreq_out <= 1;
         n_rd_out <= 1;
-        sub_cycle <= sub_cycle + 1;
+        sub_cycle <= 0;
     endrule
 
-    rule m1t4_ldgetreg(mem_cycle == 0 && sub_cycle == 3 && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DOReg8 .r));
+/*
+    (* preempts = "do_no_exec, m1t4_ldgetreg" *)
+    (* preempts = "do_no_exec, m1t4_ldgetacc" *)
+    (* preempts = "do_no_exec, m2t1_ldimmgetnextbyte" *)
+    rule do_no_exec(if_done && no_exec);
+        next_instruction();
+    endrule
+    */
+
+    rule m1t4_ldgetreg(if_done && sub_cycle == 0 && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DOReg8 .r));
         res <= rf.read_8b(r);
-        sub_cycle <= 0;
+        next_instruction();
     endrule
 
-    rule m1t4_ldgetacc(mem_cycle == 0 && sub_cycle == 3 && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DOAcc));
+    rule m1t4_ldgetacc(if_done && sub_cycle == 0 && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DOAcc));
         res <= acc;
-        sub_cycle <= 0;
+        next_instruction();
     endrule
 
-    rule m1t1_ldputreg(mem_cycle == 0 && sub_cycle == 0 && decoded.op == OpLd &&& decoded.dest matches tagged DirectOperand (tagged DOReg8 .r));
+    rule m1t1_ldputreg(is_m1 && sub_cycle == 0 && decoded.op == OpLd &&& decoded.dest matches tagged DirectOperand (tagged DOReg8 .r));
         rf.write_8b(r, res);
     endrule
 
-    rule m1t1_ldputacc(mem_cycle == 0 && sub_cycle == 0 && decoded.op == OpLd &&& decoded.dest matches tagged DirectOperand (tagged DOAcc));
+    rule m1t1_ldputacc(is_m1 && sub_cycle == 0 && decoded.op == OpLd &&& decoded.dest matches tagged DirectOperand (tagged DOAcc));
         acc <= res;
     endrule
 
-    rule m1t4_ldimmgetnextbytestart(mem_cycle == 0 && sub_cycle == 3 && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DONext8Bits));
-        mem_cycle <= 1;
-        sub_cycle <= 0;
+    rule add1(if_done && sub_cycle == 0 && decoded.op == OpAdd
+      &&& decoded.src1 matches tagged DirectOperand (tagged DOAcc)
+      &&& decoded.src2 matches tagged DirectOperand (tagged DOReg8 .r));
+        alu.request.put(ALUReqT{in1: acc[3:0], in2: rf.read_8b(r)[3:0], carry_in: False, is_sub: False});
+        next_instruction();
     endrule
 
-    rule m2t1_ldimmgetnextbyte(mem_cycle == 1 && sub_cycle == 0 && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DONext8Bits));
+    rule add2(is_m1 && sub_cycle == 0 && decoded.op == OpAdd
+      &&& decoded.src1 matches tagged DirectOperand (tagged DOAcc)
+      &&& decoded.src2 matches tagged DirectOperand (tagged DOReg8 .r));
+        ALURespT resp <- alu.response.get();
+        alu.request.put(ALUReqT{in1: acc[7:4], in2: rf.read_8b(r)[7:4], carry_in: resp.carry_out, is_sub: False});
+        acc[3:0] <= resp.out;
+    endrule
+
+    rule add3(is_m1 && sub_cycle == 1 && decoded.op == OpAdd
+      &&& decoded.src1 matches tagged DirectOperand (tagged DOAcc)
+      &&& decoded.src2 matches tagged DirectOperand (tagged DOReg8 .r));
+        ALURespT resp <- alu.response.get();
+        acc[7:4] <= resp.out;
+    endrule
+
+    rule halt(if_done && sub_cycle == 0 && decoded.op == OpHalt);
+        $finish();
+    endrule
+
+    rule m2t1_ldimmgetnextbyte(if_done && sub_cycle == 0 && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DONext8Bits));
         addr_out <= pc;
         n_mreq_out <= 0; // XXX: Should be on following negative clk edge
         n_rd_out <= 0; // XXX: "
@@ -136,22 +215,22 @@ module mkZ80a(Z80a_ifc);
         pc <= pc + 1;
     endrule
 
-    rule m2t2_ldimmwait(mem_cycle == 1 && sub_cycle == 1 && (n_wait_in > 0) && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DONext8Bits));
+    rule m2t2_ldimmwait(if_done && sub_cycle == 1 && (n_wait_in > 0) && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DONext8Bits));
         sub_cycle <= sub_cycle + 1;
     endrule
 
-    rule m2t3_ldimmread(mem_cycle == 1 && sub_cycle == 2 && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DONext8Bits));
+    rule m2t3_ldimmread(if_done && sub_cycle == 2 && decoded.op == OpLd &&& decoded.src1 matches tagged DirectOperand (tagged DONext8Bits));
         res <= data_tri;
-        mem_cycle <= 0;
-        sub_cycle <= 0;
+        next_instruction();
     endrule
 
-    rule trace_decoded_instruction(mem_cycle == 0 && sub_cycle == 3);
+    rule trace_decoded_instruction(if_done && sub_cycle == 0);
         $display(fshow(decoded));
     endrule
 
     rule trace_regs;
-        $display("pc: %h m: %h s: %h i: %h a: %h res: %h", pc, mem_cycle, sub_cycle, instr_b1, acc, res);
+        $display("pc: %h m: %h s: %h i: %h a: %h res: %h",
+            pc, mem_cycle, sub_cycle, instr_b1, acc, res);
         $display("b: %h c: %h d: %h e: %h h: %h l: %h",
             rf.read_8b(RgB), rf.read_8b(RgC),
             rf.read_8b(RgD), rf.read_8b(RgE),
@@ -221,9 +300,26 @@ module mkZ80a(Z80a_ifc);
     interface data = data_tri.io;
 endmodule
 
-interface Bram_If; 
-   method Action write(Bit#(8) data, Bit#(8) address); 
-endinterface 
+typedef Server#(ALUReqT, ALURespT) ALU_ifc;
+
+module mkALU(ALU_ifc);
+    FIFO#(ALURespT) f_out <- mkFIFO;
+
+    interface Put request;
+        method Action put(ALUReqT req);
+            Bit#(5) in1 = extend(req.in1);
+            Bit#(5) in2 = extend(req.in2);
+            Bit#(5) carry_in = (req.carry_in ? 1 : 0);
+            Bool is_sub = req.is_sub;
+            Bit#(5) res = in1 + (is_sub ? -in2 : in2) + carry_in;
+            ALURespT resp = ALURespT{carry_out: res[4] > 0, out: res[3:0]};
+            $display("REQ in1: %h, in2: %h, carry_in: %h, is_sub: %h", in1, in2, carry_in, is_sub ? 1 : 0);
+            $display("RESP carry_out: %h, out: %h", resp.carry_out ? 1 : 0, resp.out);
+            f_out.enq(resp);
+        endmethod
+    endinterface
+    interface response = toGet(f_out);
+endmodule
 
 interface RegisterFileIfc;
     method Action write_8b(Reg8T regg, Bit#(8) data);

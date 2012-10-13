@@ -1,0 +1,2 @@
+$packagemanager sdcc
+pip3 install intelhex

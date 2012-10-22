@@ -11,3 +11,5 @@
 *.boot
 *.rmh
 *.rel
+*.v
+*.vcd

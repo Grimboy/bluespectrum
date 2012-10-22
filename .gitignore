@@ -7,3 +7,7 @@
 *.swj
 *.swi
 *.bo
+*.ihx
+*.boot
+*.rmh
+*.rel

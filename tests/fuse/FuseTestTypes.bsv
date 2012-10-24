@@ -5,6 +5,15 @@ package FuseTestTypes;
 typedef struct {
     String comment;
 
+    Z80StateT state_in;
+    List#(MemoryRunT) minit;
+
+    Z80StateT state_out;
+    List#(EventT) events;
+    List#(MemoryRunT) mchanged;
+} TestT;
+
+typedef struct {
     Bit#(16) af;
     Bit#(16) bc;
     Bit#(16) de;
@@ -26,19 +35,12 @@ typedef struct {
 
     Bit#(1) halted;
     Bit#(1) tstates;
-    
-    EventListT events;
-    MemoryInitT minit;
-} TestT;
-
-typedef List#(MemoryInitRunT) MemoryInitT;
+} Z80StateT;
 
 typedef struct {
     Bit#(16) startaddr;
     List#(Bit#(8)) payload;
-} MemoryInitRunT;
-
-typedef List#(EventT) EventListT;
+} MemoryRunT;
 
 typedef struct {
     int time_;

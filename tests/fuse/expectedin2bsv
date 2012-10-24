@@ -1,0 +1,6 @@
+echo "package GeneratedTests;" > GeneratedTests.bsv
+echo >> GeneratedTests.bsv
+echo "import FuseTestTypes::*;" >> GeneratedTests.bsv
+echo >> GeneratedTests.bsv
+python2 tests2bsvlit.py tests.in >> GeneratedTests.bsv
+echo "endpackage" >> GeneratedTests.bsv

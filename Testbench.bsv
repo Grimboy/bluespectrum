@@ -10,7 +10,7 @@ module mkSpectrumTb(Empty);
         counter <= counter + 1;
     endrule
 
-    rule done(counter > 100);
+    rule done(counter > 50);
         $finish();
     endrule
 endmodule

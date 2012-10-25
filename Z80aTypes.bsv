@@ -24,6 +24,7 @@ typedef enum {
     OpInc, OpDec, OpInc16, OpDec16, 
     OpAdd, OpAdc, OpSub, OpSbc, OpCp, OpAnd, OpOr, OpXor,
     OpAdd16,
+    OpAlu8, OpAlu16,
 
     OpRlca, OpRla, OpDaa, OpScf, OpRrca, OpRra, OpCpl, OpCcf
 } InternalOpTypeT deriving (Bits, Eq, Bounded);
@@ -53,6 +54,7 @@ typedef union tagged {
 // XXX: Should maybe consider having DecodingResultT = DecodedInstructionT | PartialDecodingResultT
 typedef struct {
     InternalOpTypeT op;
+    AluCmdT alu_op;
     DecodedOperandT dest;
     DecodedOperandT src1;
     DecodedOperandT src2;
@@ -63,25 +65,34 @@ typedef struct {
 typedef struct {
     Bool sign;
     Bool zero;
-    Reserved#(1) not_used1;
-    Bool add_subtract1;
-    Reserved#(1) not_used2;
+    Bool bit5;
+    Bool half_carry;
+    Bool bit3;
     Bool parity_overflow;
-    Bool add_subtract2;
+    Bool subtract;
     Bool carry;
-} StatusRegT deriving (Bits, Eq, Bounded);
+} FlagRegT deriving (Bits, Eq, Bounded);
+
+typedef enum {
+    AluOpNop, AluOpAdd, AluOpSub, AluOpAnd, AluOpXor, AluOpOr
+} AluOpT deriving (Bits, Eq, Bounded);
 
 typedef struct {
-    Bit#(4) in1;
-    Bit#(4) in2;
+    AluOpT op;
     Bool carry_in;
-    Bool is_sub;
-} ALUReqT deriving (Bits, Eq, Bounded);
+} AluCmdT deriving (Bits, Eq, Bounded);
 
 typedef struct {
-    Bool carry_out;
-    Bit#(4) out;
-} ALURespT deriving (Bits, Eq, Bounded);
+    AluCmdT cmd;
+    Bit#(8) in1;
+    Bit#(8) in2;
+    FlagRegT flags_in;
+} AluReqT deriving (Bits, Eq, Bounded);
+
+typedef struct {
+    FlagRegT flags_out;
+    Bit#(8) out;
+} AluRespT deriving (Bits, Eq, Bounded);
 
 instance FShow#(IncompleteInstructionT);
     function Fmt fshow (IncompleteInstructionT incomp);
@@ -122,6 +133,7 @@ instance FShow#(InternalOpTypeT);
             OpRra: return $format("OpRra");
             OpCpl: return $format("OpCpl");
             OpCcf: return $format("OpCcf");
+            OpAlu8: return $format("OpAlu8");
         endcase
     endfunction
 endinstance
@@ -192,10 +204,32 @@ instance FShow#(DecodedOperandT);
     endfunction
 endinstance
 
+instance FShow#(AluOpT);
+    function Fmt fshow (AluOpT op);
+        case(op)
+            AluOpNop: return $format("AluOpNop");
+            AluOpAdd: return $format("AluOpAdd");
+            AluOpSub: return $format("AluOpSub");
+            AluOpAnd: return $format("AluOpAnd");
+            AluOpXor: return $format("AluOpXor");
+            AluOpOr: return $format("AluOpOr");
+        endcase
+    endfunction
+endinstance
+
+instance FShow#(AluCmdT);
+    function Fmt fshow (AluCmdT cmd);
+        return $format("<AluCmd op: ") + fshow(cmd.op) +
+            $format("\n  carry_in: ") + fshow(cmd.carry_in) +
+            $format(">");
+    endfunction
+endinstance
+
 instance FShow#(DecodedInstructionT);
     function Fmt fshow (DecodedInstructionT inst);
         return ($format("<DecodedInstruction") +
             $format("\n op: ") + fshow(inst.op) +
+            $format("\n alu_op: ") + fshow(inst.alu_op) +
             $format("\n dest: ") + fshow(inst.dest) +
             $format("\n src1: ") + fshow(inst.src1) +
             $format("\n src2: ") + fshow(inst.src2) +
@@ -229,8 +263,15 @@ ConditionCodeT tab_cc[8] = {
     CcPO, CcPE, CcP, CcM
 };
 
-InternalOpTypeT tab_alu[8] = {
-    OpAdd, OpAdc, OpSub, OpSbc, OpAnd, OpXor, OpOr, OpCp
+AluCmdT tab_alu[8] = {
+    AluCmdT{op: AluOpAdd, carry_in: False},
+    AluCmdT{op: AluOpAdd, carry_in: True},
+    AluCmdT{op: AluOpSub, carry_in: False},
+    AluCmdT{op: AluOpSub, carry_in: True},
+    AluCmdT{op: AluOpAnd, carry_in: False},
+    AluCmdT{op: AluOpXor, carry_in: False},
+    AluCmdT{op: AluOpOr, carry_in: False},
+    AluCmdT{op: AluOpSub, carry_in: False}
 };
 
 /*
@@ -244,6 +285,8 @@ InternalOpTypeT tab_bli[8][4] = {
 }
 */
 
+AluCmdT nop_cmd = AluCmdT{op: AluOpNop, carry_in: False};
+
 function DecodedInstructionT decode_simple(Bit#(8) inst, IncompleteInstructionT incomp);
     Bit#(2) x = inst[7:6];
     Bit#(3) y = inst[5:3];
@@ -252,140 +295,140 @@ function DecodedInstructionT decode_simple(Bit#(8) inst, IncompleteInstructionT 
     Bit#(2) p = inst[5:4];
     Bit#(1) q = inst[3];
 
-    //DecodedInstructionT d = DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, incomp: IncNo};
+    //DecodedInstructionT d = DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, incomp: IncNo};
 
     case(incomp)
         IncNo: case(x)
             0: case(z)
                 0: case(y)
-                    0: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // NOP
-                    1: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // EX AF, AF'
-                    2: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // DJNZ d
-                    3: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // JR d
-                    default: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // JR cc[y-4], d
+                    0: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // NOP
+                    1: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // EX AF, AF'
+                    2: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // DJNZ d
+                    3: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // JR d
+                    default: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // JR cc[y-4], d
                 endcase
                 1: case(q)
-                    0: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD rp[p], nn
-                    1: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // ADD HL, rp[p]
+                    0: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD rp[p], nn
+                    1: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // ADD HL, rp[p]
                 endcase
                 2: case(q)
                     0: case(p)
-                        0, 1: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD (rp[p]), A
-                        2: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented LD (nn), HL
-                        3: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD (nn), A
+                        0, 1: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD (rp[p]), A
+                        2: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented LD (nn), HL
+                        3: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD (nn), A
                     endcase
                     1: case(p)
-                        0, 1: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD A, (rp[p])
-                        2: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD HL, (nn)
-                        3: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD A, (nn)
+                        0, 1: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD A, (rp[p])
+                        2: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD HL, (nn)
+                        3: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD A, (nn)
                     endcase
                 endcase
                 3: case(q)
-                    0: return DecodedInstructionT{op: OpInc16, dest: tagged DirectOperand (tagged DOReg8 tab_rp[p]), src1: tagged DirectOperand (tagged DOReg8 tab_rp[p]), src2: tagged NoOperand, displacement: False, incomp: IncNo}; // INC rp[p]
-                    1: return DecodedInstructionT{op: OpDec16, dest: tagged DirectOperand (tagged DOReg8 tab_rp[p]), src1: tagged DirectOperand (tagged DOReg8 tab_rp[p]), src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // DEC rp[p]
+                    0: return DecodedInstructionT{op: OpInc16, alu_op: nop_cmd, dest: tagged DirectOperand (tagged DOReg16 tab_rp[p]), src1: tagged DirectOperand (tagged DOReg16 tab_rp[p]), src2: tagged NoOperand, displacement: False, incomp: IncNo}; // INC rp[p]
+                    1: return DecodedInstructionT{op: OpDec16, alu_op: nop_cmd, dest: tagged DirectOperand (tagged DOReg16 tab_rp[p]), src1: tagged DirectOperand (tagged DOReg16 tab_rp[p]), src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // DEC rp[p]
                 endcase
-                4: return DecodedInstructionT{op: OpInc, dest: tab_r[y], src1: tab_r[y], src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // INC r[y]
-                5: return DecodedInstructionT{op: OpDec, dest: tab_r[y], src1: tab_r[y], src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // DEC r[y]
-                6: return DecodedInstructionT{op: OpLd, dest: tab_r[y], src1: tagged DirectOperand tagged DONext8Bits, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // LD r[y], n
+                4: return DecodedInstructionT{op: OpInc, alu_op: nop_cmd, dest: tab_r[y], src1: tab_r[y], src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // INC r[y]
+                5: return DecodedInstructionT{op: OpDec, alu_op: nop_cmd, dest: tab_r[y], src1: tab_r[y], src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // DEC r[y]
+                6: return DecodedInstructionT{op: OpLd, alu_op: nop_cmd, dest: tab_r[y], src1: tagged DirectOperand tagged DONext8Bits, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // LD r[y], n
                 7: case(y)
-                    0: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RLCA
-                    1: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RRCA
-                    2: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RLA
-                    3: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RRA
-                    4: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // DAA
-                    5: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // CPL
-                    6: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // SCF
-                    7: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // CCF
+                    0: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RLCA
+                    1: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RRCA
+                    2: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RLA
+                    3: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RRA
+                    4: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // DAA
+                    5: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // CPL
+                    6: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // SCF
+                    7: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // CCF
                 endcase
             endcase
             1: if(z==6 && y==6)
-                return DecodedInstructionT{op: OpHalt, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // HALT
+                return DecodedInstructionT{op: OpHalt, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // HALT
             else
-                return DecodedInstructionT{op: OpLd, dest: tab_r[y], src1: tab_r[z], src2: tagged NoOperand, displacement: False, incomp: IncNo}; // LD r[y], r[z]
+                return DecodedInstructionT{op: OpLd, alu_op: nop_cmd, dest: tab_r[y], src1: tab_r[z], src2: tagged NoOperand, displacement: False, incomp: IncNo}; // LD r[y], r[z]
             2: begin 
-                return DecodedInstructionT{op: tab_alu[y], dest: tagged DirectOperand (tagged DOReg8 RgA), src1: tagged DirectOperand (tagged DOReg8 RgA), src2: tab_r[z], displacement: False, incomp: IncNo}; // alu[y] r[z]
+                return DecodedInstructionT{op: OpAlu8, alu_op: tab_alu[y], dest: y == 7 ? tagged NoOperand : tagged DirectOperand (tagged DOReg8 RgA), src1: tagged DirectOperand (tagged DOReg8 RgA), src2: tab_r[z], displacement: False, incomp: IncNo}; // alu[y] r[z]
             end
             3: case(z)
-                0: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RET cc[y]
+                0: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RET cc[y]
                 1: case(q)
-                    0: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // POP rp2[p]
+                    0: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // POP rp2[p]
                     1: case (p)
-                        0: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RET
-                        1: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // EXX
-                        2: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // JP HL
-                        3: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD SP,HL
+                        0: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RET
+                        1: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // EXX
+                        2: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // JP HL
+                        3: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD SP,HL
                     endcase
                 endcase
-                2: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // JP cc[y], nn
+                2: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // JP cc[y], nn
                 3: case(y)
-                    0: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // JP nn
-                    1: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncBits}; // (CB prefix)
-                    2: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // OUT (n), A
-                    3: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // IN A, (n)
-                    4: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // EX (SP), HL
-                    5: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // EX DE, HL
-                    6: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // DI
-                    7: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // EI
+                    0: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // JP nn
+                    1: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncBits}; // (CB prefix)
+                    2: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // OUT (n), A
+                    3: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // IN A, (n)
+                    4: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // EX (SP), HL
+                    5: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // EX DE, HL
+                    6: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // DI
+                    7: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // EI
                 endcase
-                4: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // CALL cc[y], nn
+                4: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // CALL cc[y], nn
                 5: case (q)
-                    0: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // PUSH rp2[p]
+                    0: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // PUSH rp2[p]
                     1: case(p)
-                        0: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // CALL nn
-                        1: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncIx}; // (DD prefix)
-                        2: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncExtd}; // (ED prefix)
-                        3: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncIy}; // (FD prefix)
+                        0: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // CALL nn
+                        1: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncIx}; // (DD prefix)
+                        2: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncExtd}; // (ED prefix)
+                        3: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncIy}; // (FD prefix)
                     endcase
                 endcase
-                6: return DecodedInstructionT{op: tab_alu[y], dest: tagged DirectOperand (tagged DOReg8 RgA), src1: tagged DirectOperand (tagged DOReg8 RgA), src2: tagged DirectOperand tagged DONext8Bits, displacement: False, incomp: IncNo}; // alu[y] n
-                7: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RST y*8
+                6: return DecodedInstructionT{op: OpAlu8, alu_op: tab_alu[y], dest: tagged DirectOperand (tagged DOReg8 RgA), src1: tagged DirectOperand (tagged DOReg8 RgA), src2: tagged DirectOperand tagged DONext8Bits, displacement: False, incomp: IncNo}; // alu[y] n
+                7: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RST y*8
             endcase
         endcase
         IncExtd: case(x)
-            0,3: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // NONI, NOP
+            0,3: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // NONI, NOP
             1: case(z)
                 0: if(y!=6)
-                    return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // IN r[y], (C)
+                    return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // IN r[y], (C)
                 else
-                    return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // IN (C)
+                    return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // IN (C)
                 1: if(y!=6)
-                    return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // OUT (C), r[y]
+                    return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // OUT (C), r[y]
                 else
-                    return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // OUT (C), 0
+                    return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // OUT (C), 0
                 2: case(q)
-                    0: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // SBC HL, rp[p]
-                    1: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // ADC HL, rp[p]
+                    0: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // SBC HL, rp[p]
+                    1: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // ADC HL, rp[p]
                 endcase
                 3: case(q)
-                    0: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD (nn), rp[p]
-                    1: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD rp[p], (nn)
+                    0: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD (nn), rp[p]
+                    1: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD rp[p], (nn)
                 endcase
-                4: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // NEG
+                4: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // NEG
                 5: if(y!=1)
-                    return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RETN
+                    return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RETN
                 else
-                    return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RETI
-                6: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // IM im[y]
+                    return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RETI
+                6: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // IM im[y]
                 7: case(y)
-                    0: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD I, A
-                    1: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD R, A
-                    2: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD A, I
-                    3: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD A, R
-                    4: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RRD
-                    5: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RLD
-                    6,7: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // NOP
+                    0: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD I, A
+                    1: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD R, A
+                    2: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD A, I
+                    3: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD A, R
+                    4: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RRD
+                    5: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RLD
+                    6,7: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // NOP
                 endcase
             endcase
             2: if(z<4 && y>=4)
-                return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // bli[y,z]
+                return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // bli[y,z]
             else
-                return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // NONI, NOP
+                return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // NONI, NOP
         endcase
-        IncBits: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented
-        IncIx: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented
-        IncIxBits: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented
-        IncIy: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented
-        IncIyBits: return DecodedInstructionT{op: OpNop, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented
+        IncBits: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented
+        IncIx: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented
+        IncIxBits: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented
+        IncIy: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented
+        IncIyBits: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented
     endcase
 endfunction
 

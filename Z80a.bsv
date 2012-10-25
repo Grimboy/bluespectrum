@@ -10,6 +10,8 @@ import TriState::*;
 import Z80aTypes::*;
 import ConfigReg::*;
 
+import FuseTestTypes::*;
+
 // Next milestone: Z80 can execute LD reg, literal; LD reg, reg and ADD reg instructions loaded from ROM
 
 module mkDLWireU(Wire#(element_type))
@@ -30,6 +32,9 @@ endmodule
 
 (* always_ready, always_enabled *)
 interface Z80a_ifc;
+    // test
+    method Action init_test(Z80StateT state);
+
     // system control
     method Bit#(1) n_m1();
     method Bit#(1) n_mreq(); // XXX: Should be tristate
@@ -56,7 +61,7 @@ interface Z80a_ifc;
     interface Inout#(Bit#(8)) data;
 endinterface
 
-(* synthesize *)
+//(* synthesize *)
 module mkZ80a #(parameter Bool no_exec) (Z80a_ifc);
     // Submodules
     ALU_ifc alu <- mkALU;
@@ -92,6 +97,7 @@ module mkZ80a #(parameter Bool no_exec) (Z80a_ifc);
     Reg#(Bit#(8)) displacement <- mkRegU;
     Reg#(Bit#(8)) instr_b1 <- mkRegU;
     Reg#(Bit#(8)) res <- mkRegU;
+    Reg#(Bit#(8)) tmp8 <- mkRegU;
     RegisterFileIfc rf <- mkRegisterFile;
 
     // Decoded
@@ -112,7 +118,6 @@ module mkZ80a #(parameter Bool no_exec) (Z80a_ifc);
             written_back <= False;
         endaction);
     endfunction
-
 
     rule m1_out_start(is_m1 && sub_cycle == 0);
         n_m1_out <= 0;
@@ -170,26 +175,22 @@ module mkZ80a #(parameter Bool no_exec) (Z80a_ifc);
         rf.write_8b(r, res);
     endrule
 
-    rule add1(if_done && sub_cycle == 0 && decoded.op == OpAdd
+    rule alu1(if_done && sub_cycle == 0 && decoded.op == OpAlu8
       &&& decoded.src1 matches tagged DirectOperand (tagged DOReg8 .r1)
       &&& decoded.src2 matches tagged DirectOperand (tagged DOReg8 .r2));
-        alu.request.put(ALUReqT{in1: rf.read_4b(r1, False), in2: rf.read_4b(r2, False), carry_in: False, is_sub: False});
+        alu.request.put(AluReqT{cmd: decoded.alu_op, in1: rf.read_8b(r1), in2: rf.read_8b(r2), flags_in: unpack(rf.read_8b(RgF))});
         next_instruction();
     endrule
 
-    rule add2(is_m1 && sub_cycle == 0 && decoded.op == OpAdd
-      &&& decoded.src1 matches tagged DirectOperand (tagged DOReg8 .r1)
-      &&& decoded.src2 matches tagged DirectOperand (tagged DOReg8 .r2));
-        ALURespT resp <- alu.response.get();
-        alu.request.put(ALUReqT{in1: rf.read_4b(r1, True), in2: rf.read_4b(r2, True), carry_in: resp.carry_out, is_sub: False});
-        rf.write_4b(r1, False, resp.out);
+    rule alu2(is_m1 && sub_cycle == 0 && decoded.op == OpAlu8
+      &&& decoded.dest matches tagged DirectOperand (tagged DOReg8 .r));
+        AluRespT resp <- alu.response.get();
+        rf.write_8b(r, resp.out);
+        tmp8 <= pack(resp.flags_out);
     endrule
 
-    rule add3(is_m1 && sub_cycle == 1 && decoded.op == OpAdd
-      &&& decoded.src1 matches tagged DirectOperand (tagged DOReg8 .r1)
-      &&& decoded.src2 matches tagged DirectOperand (tagged DOReg8 .r2));
-        ALURespT resp <- alu.response.get();
-        rf.write_4b(r1, True, resp.out);
+    rule alu3(is_m1 && sub_cycle == 1 && decoded.op == OpAlu8);
+        rf.write_8b(RgF, tmp8);
     endrule
 
     rule halt(if_done && sub_cycle == 0 && decoded.op == OpHalt);
@@ -232,6 +233,11 @@ module mkZ80a #(parameter Bool no_exec) (Z80a_ifc);
     rule trace_wires;
         $display("addr_out: %h", addr_out);
     endrule
+
+    // test
+    method Action init_test(Z80StateT state);
+        rf.init_test(state);
+    endmethod
 
     // system control
     method Bit#(1) n_m1();
@@ -292,21 +298,49 @@ module mkZ80a #(parameter Bool no_exec) (Z80a_ifc);
     interface data = data_tri.io;
 endmodule
 
-typedef Server#(ALUReqT, ALURespT) ALU_ifc;
+typedef Server#(AluReqT, AluRespT) ALU_ifc;
 
 module mkALU(ALU_ifc);
-    FIFO#(ALURespT) f_out <- mkFIFO;
+    FIFO#(AluRespT) f_out <- mkFIFO;
 
     interface Put request;
-        method Action put(ALUReqT req);
-            Bit#(5) in1 = extend(req.in1);
-            Bit#(5) in2 = extend(req.in2);
-            Bit#(5) carry_in = (req.carry_in ? 1 : 0);
-            Bool is_sub = req.is_sub;
-            Bit#(5) res = in1 + (is_sub ? -in2 : in2) + carry_in;
-            ALURespT resp = ALURespT{carry_out: res[4] > 0, out: res[3:0]};
-            $display("ALU REQ in1: %h, in2: %h, carry_in: %h, is_sub: %h", in1, in2, carry_in, is_sub ? 1 : 0);
-            $display("ALU RESP carry_out: %h, out: %h", resp.carry_out ? 1 : 0, resp.out);
+        method Action put(AluReqT req);
+            Bit#(8) in1 = req.in1;
+            Bit#(8) in2 = req.in2;
+            FlagRegT flags = req.flags_in;
+            $display("ALU REQ in1: %h, in2: %h, flags: %h", in1, in2, pack(flags));
+            Bit#(8) res = ?;
+            case(req.cmd.op)
+                AluOpAdd, AluOpSub: begin
+                    if (req.cmd.op == AluOpSub)
+                        in2 = -in2;
+                    Bit#(1) carry_in = (req.cmd.carry_in && flags.carry) ? 1 : 0;
+                    Bit#(5) half_res = extend(in1[3:0]) + extend(in2[3:0]) + extend(carry_in);
+                    Bit#(8) sign_carry_in_res = extend(in1[6:0]) + extend(in2[6:0]) + extend(carry_in);
+                    Bit#(9) ext_res = extend(in1) + extend(in2) + extend(carry_in);
+                    // I really hope Bluespec and Quartus does clever expression availability and makes this one adder chain
+                    res = ext_res[7:0];
+                    flags.sign = ext_res[7] > 0;
+                    flags.zero = res == 0;
+                    flags.bit5 = res[5] > 0;
+                    flags.half_carry = half_res[4] > 0;
+                    flags.bit3 = res[3] > 0;
+                    flags.parity_overflow = (sign_carry_in_res[7] ^ ext_res[8]) > 0;
+                    flags.subtract = req.cmd.op == AluOpSub;
+                    flags.carry = ext_res[8] > 0;
+                end
+                AluOpAnd: begin
+                    res = in1 & in2;
+                end
+                AluOpXor: begin
+                    res = in1 ^ in2;
+                end
+                AluOpOr: begin
+                    res = in1 | in2;
+                end
+            endcase
+            AluRespT resp = AluRespT{flags_out: flags, out: res};
+            $display("ALU RESP out: %h flags: %h", resp.out, pack(resp.flags_out));
             f_out.enq(resp);
         endmethod
     endinterface
@@ -314,6 +348,10 @@ module mkALU(ALU_ifc);
 endmodule
 
 interface RegisterFileIfc;
+    // test
+    method Action init_test(Z80StateT state);
+
+    // other
     method Action write_4b(Reg8T regg, Bool high, Bit#(4) data);
     method Bit#(4) read_4b(Reg8T regg, Bool high);
     method Action write_8b(Reg8T regg, Bit#(8) data);
@@ -325,6 +363,24 @@ endinterface
 module mkRegisterFile(RegisterFileIfc); // Use RegFile module?
     Vector#(TExp#(SizeOf#(Reg8T)), Reg#(Bit#(8))) rf <- replicateM(mkReg(0));
     Reg#(Bool) is_shadow <- mkReg(False); // XXX: Might be bad idea because shadow registers are switched in two stages.
+
+    function Action i_write_16b(Reg16T regg, Bit#(16) data);
+        return (action
+            rf[pack(regg) * 2] <= data[15:8];
+            rf[pack(regg) * 2 + 1] <= data[7:0];
+        endaction);
+    endfunction
+
+    method Action init_test(Z80StateT state);
+        i_write_16b(RgAF, state.af);
+        i_write_16b(RgBC, state.bc);
+        i_write_16b(RgDE, state.de);
+        i_write_16b(RgHL, state.hl);
+        i_write_16b(RgSP, state.sp);
+        //TODO IX
+        //TODO IY
+        //TODO SHADOW
+    endmethod
 
     method Action write_4b(Reg8T regg, Bool high, Bit#(4) data);
         rf[pack(regg)][(high ? 7 : 3):(high ? 4 : 0)] <= data;
@@ -343,8 +399,7 @@ module mkRegisterFile(RegisterFileIfc); // Use RegFile module?
     endmethod 
 
     method Action write_16b(Reg16T regg, Bit#(16) data);
-        rf[pack(regg) * 2] <= data[15:8];
-        rf[pack(regg) * 2 + 1] <= data[7:0];
+        i_write_16b(regg, data);
     endmethod 
 
     method Bit#(16) read_16b(Reg16T regg);

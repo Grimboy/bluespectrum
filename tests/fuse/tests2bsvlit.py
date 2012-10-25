@@ -108,4 +108,4 @@ try:
 except StopIteration:
     pass
 
-print "List#(TestT) tests_in = %s;" % (list2consstr(tests_in, fmt_test),)
+print "List#(TestT) tests = %s;" % (list2consstr(tests_in, fmt_test),)

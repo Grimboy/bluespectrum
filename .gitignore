@@ -6,6 +6,8 @@
 *.swk
 *.swj
 *.swi
+*.swg
+*.swh
 *.bo
 *.ihx
 *.boot
@@ -13,3 +15,4 @@
 *.rel
 *.v
 *.vcd
+mk*

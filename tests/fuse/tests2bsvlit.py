@@ -1,4 +1,4 @@
-import sys
+import os, sys, subprocess
 
 sys.setrecursionlimit(1000000)
 
@@ -102,10 +102,76 @@ def fmt_test(test):
     )
 
 try:
-    tests_in = []
+    tests = []
     while 1:
-        tests_in.append(get_test())
+        tests.append(get_test())
 except StopIteration:
     pass
 
-print "List#(TestT) tests = %s;" % (list2consstr(tests_in, fmt_test),)
+for test in tests:
+    if not os.path.exists(test['comment']):
+        os.mkdir(test['comment'])
+    os.chdir(test['comment'])
+    print test
+    # make init.rmh
+    init = open("init.asm", 'w')
+    init.write("\t.area code (abs)\n")
+    init.write("\t.org 0x0000\n")
+
+    init.write("\tld a, #0x%s\n" % test['auxstate_in'][0])
+    init.write("\tld i, a\n")
+    init.write("\tld a, #0x%s\n" % test['auxstate_in'][1])
+    init.write("\tld r, a\n")
+    if test['auxstate_in'][2] == "1":
+        init.write("\tei\n")
+    # XXX: Can't support iff2 this way
+    init.write("\tim %s\n" % test['auxstate_in'][4])
+
+    init.write("\tld bc, #0x%s\n" % test['regfile_in'][0])
+    init.write("\tpush bc\n")
+    init.write("\tpop af\n")
+    init.write("\tld bc, #0x%s\n" % test['regfile_in'][1])
+    init.write("\tld de, #0x%s\n" % test['regfile_in'][2])
+    init.write("\tld hl, #0x%s\n" % test['regfile_in'][3])
+    init.write("\tex af, af'\n")
+    init.write("\texx\n")
+
+    init.write("\tld bc, #0x%s\n" % test['regfile_in'][4])
+    init.write("\tpush bc\n")
+    init.write("\tpop af\n")
+    init.write("\tld bc, #0x%s\n" % test['regfile_in'][5])
+    init.write("\tld de, #0x%s\n" % test['regfile_in'][6])
+    init.write("\tld hl, #0x%s\n" % test['regfile_in'][7])
+    init.write("\tex af, af'\n")
+    init.write("\texx\n")
+
+    init.write("\tld ix, #0x%s\n" % test['regfile_in'][8])
+    init.write("\tld iy, #0x%s\n" % test['regfile_in'][9])
+    init.write("\tld sp, #0x%s\n" % test['regfile_in'][10])
+    init.write("\t.db 0xC3, 0x%s, 0x%s\n" % (test['regfile_in'][11][0:2], test['regfile_in'][11][2:4])) # jp **
+
+    init.close()
+    subprocess.call(["sdasz80", "-o", "init.rel", "init.asm"])
+    subprocess.call(["sdldz80", "-i", "init.ihx", "init.rel"])
+    subprocess.call(["python3", "../ihx2rmh.py", "init.ihx", "16k"])
+    # make run.rmh
+    prog = open("prog.rmh", 'w')
+    for addr, run in test['minit'].items():
+        prog.write("@%s\n" % (addr,))
+        for word in run:
+            prog.write(word + "\n")
+        prog.write("76\n")
+    prog.close()
+    # run the test
+    os.chdir("../../..")
+    if os.path.exists("testinit.rmh"):
+        os.remove("testinit.rmh")
+    os.symlink("tests/fuse/%s/init.rmh" % (test['comment'],), "testinit.rmh")
+    if os.path.exists("testprog.rmh"):
+        os.remove("testprog.rmh")
+    os.symlink("tests/fuse/%s/prog.rmh" % (test['comment'],), "testprog.rmh")
+    actual_output = subprocess.check_output(["./mkFuseTest"])
+    # compare the output
+    print actual_output
+    break
+    os.chdir("tests/fuse")

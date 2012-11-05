@@ -18,6 +18,6 @@ for i, e in enumerate(arr):
     outfile.write("{0:02x}".format(e))
     outfile.write("\n")
 
-outfile = open(sys.argv[1].rsplit(".", 1)[0] + ".boot", 'w')
+outfile = open(sys.argv[1].rsplit(".", 1)[0] + ".boot", 'wb')
 outfile.write(arr.tostring())
 outfile.close()

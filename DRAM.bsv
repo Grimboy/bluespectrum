@@ -12,9 +12,6 @@ import List::*;
 
 (* always_ready, always_enabled *)
 interface DRAM_ifc;
-    // test
-    method Action init_test(MemoryInitT minit);
-
     // system control
     method Action cs(Bit#(1) cs);
     method Action n_oe(Bit#(1) n_oe);
@@ -36,15 +33,6 @@ module mkDRAM(DRAM_ifc);
     RegFile#(Bit#(14), Bit#(8)) ram <- mkRegFileFullLoad("rom.rmh"); // XXX: Make a parameter
     RWire#(Bit#(8)) data_out <- mkRWire;
     TriState#(Bit#(8)) data_tri <- mkTriState(isValid(data_out.wget()), fromMaybe(?, data_out.wget()));
-
-    method Action init_test(MemoryInitT minit);
-        for (Integer i=0;i<length(minit);i=i+1) begin
-            MemoryInitRunT run = minit[i];
-            for (Integer j=0;j<length(run.payload);j=j+1) begin
-                ram.upd((run.startaddr + fromInteger(j))[13:0], run.payload[j]);
-            end
-        end
-    endmethod
 
     // control
     method Action cs(Bit#(1) c);

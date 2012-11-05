@@ -2,6 +2,7 @@ package DisplayGenerator;
 
 import Connectable::*;
 import RegFile::*;
+import StmtFSM::*;
 
 typedef struct {
     Bit#(1) r;
@@ -37,7 +38,9 @@ endinterface
 
 ZXRGB border = ZXRGB{r: 0, g: 0, b: 0};
 
+(* synthesize *)
 module mkPALGenerator(PALGenerator_ifc);
+    // XXX: Waveform time
     RegFile#(Bit#(14), Bit#(8)) vid_mem <- mkRegFileFullLoad("screendump.rmh");
 
     Reg#(Bit#(9)) pal_line <- mkReg(0);
@@ -52,12 +55,13 @@ module mkPALGenerator(PALGenerator_ifc);
     ZXRGB pixel_color = (pixel_bit > 0) ? attr_byte.fg : attr_byte.bg;
     Wire#(ZXRGB) output_color <- mkBypassWire();
 
-    (* descending_urgency = "pal_screen, pal_line_end, pal_next_pixel" *)
+    (* preempts = "pal_screen, pal_line_end" *)
     rule pal_screen(pal_line == 311 && pal_col == 447);
         pal_col <= 0;
         pal_line <= 0;
     endrule
 
+    (* preempts = "pal_line_end, pal_next_pixel" *)
     rule pal_line_end(pal_col == 447);
         pal_col <= 0;
         pal_line <= pal_line + 1;
@@ -71,19 +75,33 @@ module mkPALGenerator(PALGenerator_ifc);
         if (pal_line < 192) begin
             if (pal_col < 256 ) begin
                 output_color <= pixel_color; // Display
-            end else if (pal_col < 320) begin
-                output_color <= border; // Right border
+                /*
+                if (pal_line == 0 && pal_col == 0) begin
+                    $display("###CUT HERE###");
+                    $display("P3");
+                    $display("256 192");
+                    $display("255");
+                end
+                $display(
+                    "%d %d %d",
+                    8'd127 * extend(pixel_color.r),
+                    8'd127 * extend(pixel_color.g),
+                    8'd127 * extend(pixel_color.b)
+                );
+                */
+            end else if ((pal_col >= 416) || (pal_col < 320)) begin
+                output_color <= border; // Left and right border
             end else if (pal_col < 416) begin
                 output_color <= unpack(0); // HBlank
-            end else begin
-                output_color <= border; // Left border
             end
-        end else if (pal_line < 248) begin
-            output_color <= border; // Bottom border
-        end else if (pal_line < 256) begin
-            output_color <= unpack(0); // VBlank
+        end else if ((pal_line >= 256) || (pal_line < 248)) begin
+            if ((pal_col >= 320) || (pal_col < 416)) begin
+                output_color <= border; // Top and bottom border
+            end else begin
+                output_color <= unpack(0); // HBlank
+            end
         end else begin
-            output_color <= border; // Top border
+            output_color <= unpack(0); // VBlank
         end
     endrule
 
@@ -104,24 +122,23 @@ module mkPALGenerator(PALGenerator_ifc);
     endmethod
 
     method Bit#(1) n_sync();
-        if (pal_line < 192) begin // Not Vsync
-            if (pal_col < 336 ) begin
+        if ((pal_line >= 252) || (pal_line < 248)) begin // Not Vsync
+            if (pal_col < 336) begin
                 return 1; // Not Hsync
             end else if (pal_col < 368) begin
                 return 0; // HSync
             end else begin
                 return 1; // Not Hsync
             end
-        end else if (pal_line < 252) begin
-            return 0; // VSync
         end else begin
-            return 1; // Not Vsync
+            return 0; // VSync
         end
     endmethod
 endmodule
 
 `define WIDTH 352
 `define HEIGHT 304
+`define AREA (WIDTH * HEIGHT)
 
 (* always_ready, always_enabled *)
 interface PAL2Framebuffer_ifc;
@@ -133,46 +150,96 @@ interface PAL2Framebuffer_ifc;
     method Action n_sync(Bit#(1) s);
 endinterface
 
+(* synthesize *)
 module mkPAL2Framebuffer(PAL2Framebuffer_ifc);
     // 352 * 304 * 2
-    RegFile#(Bit#(18), ZXRGBI) double_buffer <- mkRegFile(0, 262143);
-    Reg#(Bit#(1)) write_buff <- mkReg(0);
-    Bit#(1) read_buff = ~write_buff;
+    RegFile#(Bit#(19), ZXRGBI) triple_buffer <- mkRegFile(0, (1 << 17) * 3);
+    Reg#(UInt#(2)) write_buff0 <- mkReg(0);
+    Reg#(UInt#(2)) write_buff1 <- mkReg(1);
+    Reg#(UInt#(1)) write_buff_index <- mkReg(0);
+    UInt#(2) write_buff = write_buff_index > 0 ? write_buff1 : write_buff0;
+    Reg#(UInt#(2)) inactive_write_buff = write_buff_index > 0 ?  write_buff0 : write_buff1;
+    UInt#(2) read_buff = 3 - (write_buff0 + write_buff1);
 
-    Reg#(Bit#(9)) pal_line <- mkReg(0);
-    Reg#(Bit#(9)) pal_col <- mkReg(0);
-    Reg#(Bit#(10)) sync_length <- mkReg(0);
+    Reg#(Int#(10)) pal_line <- mkReg(0);
+    Reg#(Int#(10)) pal_col <- mkReg(0);
+    Reg#(UInt#(10)) sync_length <- mkReg(0);
 
-    Bit#(17) write_addr = extend(pal_line) * `WIDTH + extend(pal_col);
+    Bit#(17) write_addr = pack(extend(pal_line) * `WIDTH + extend(pal_col));
 
     Wire#(Bit#(1)) n_hl_w <- mkBypassWire();
     Wire#(Bit#(1)) red_w <- mkBypassWire();
     Wire#(Bit#(1)) green_w <- mkBypassWire();
     Wire#(Bit#(1)) blue_w <- mkBypassWire();
+    Wire#(Bit#(1)) n_sync_w <- mkBypassWire();
 
-    function Action framebuffer2netppm();
+    Reg#(UInt#(9)) ppmi <- mkReg(0);
+    Reg#(UInt#(9)) ppmj <- mkReg(0);
+
+    function Action print_buffs();
         return (action
-            $display("###CUT HERE###");
-            $display("P3");
-            $display("%d %d", `WIDTH, `HEIGHT);
-            $display("255");
-            for (int j=0;j<`HEIGHT;j=j+1) begin
-                for (int i=0;i<`WIDTH;i=i+1) begin
-                    Bit#(17) read_addr = truncate(pack(j)) * `WIDTH + truncate(pack(i));
-                    ZXRGBI pixcol = double_buffer.sub({read_buff, read_addr});
-                    $display(
-                        "%d %d %d",
-                        8'd127 * (extend(pixcol.r) + extend(pixcol.i)),
-                        8'd127 * (extend(pixcol.g) + extend(pixcol.i)),
-                        8'd127 * (extend(pixcol.b) + extend(pixcol.i))
-                    );
-                end
-            end
+            $display("wb0: %d wb1: %d wbi: %d wb: %d iwb: %d rb: %d", write_buff0, write_buff1, write_buff_index, write_buff, inactive_write_buff, read_buff);
         endaction);
     endfunction
 
-    rule write_col ((pal_line < `WIDTH) && (pal_col < `HEIGHT));
-        double_buffer.upd({write_buff, write_addr}, ZXRGBI{r: red_w, b: blue_w, g: green_w, i: ~n_hl_w});
+    Stmt framebuffer2netppmstmt =
+    seq
+        $display("###CUT HERE###");
+        $display("P3");
+        $display("%d %d", `WIDTH, `HEIGHT);
+        $display("255");
+        for (ppmj<=0;ppmj<`HEIGHT;ppmj<=ppmj+1)
+            for (ppmi<=0;ppmi<`WIDTH;ppmi<=ppmi+1) action
+                Bit#(17) read_addr = extend(pack(ppmj * `WIDTH + ppmi));
+                ZXRGBI pixcol = triple_buffer.sub({pack(read_buff), read_addr});
+                $display(
+                    "%d %d %d",
+                    8'd127 * (extend(pixcol.r) + extend(pixcol.i)),
+                    8'd127 * (extend(pixcol.g) + extend(pixcol.i)),
+                    8'd127 * (extend(pixcol.b) + extend(pixcol.i))
+                );
+            endaction
+        inactive_write_buff <= read_buff;
+        //print_buffs();
+    endseq;
+
+    FSM framebuffer2netppmfsm <- mkFSM(framebuffer2netppmstmt);
+
+    (* preempts = "end_sync, inc_col" *)
+    rule inc_col;
+        pal_col <= pal_col + 1;
+    endrule
+
+    rule trace;
+        $display("#wrbf: %d wrad: %d line: %d col: %d r: %d g: %d b: %d i: %d", write_buff, write_addr, pal_line, pal_col, red_w, blue_w, green_w, ~n_hl_w);
+    endrule
+
+    rule write_col((0 <= pal_line) && (pal_line < `HEIGHT) && (0 <= pal_col) && (pal_col < `WIDTH));
+        triple_buffer.upd({pack(write_buff), write_addr}, ZXRGBI{r: red_w, b: blue_w, g: green_w, i: ~n_hl_w});
+    endrule
+
+    rule printfb(pal_line == (`HEIGHT - 1) && pal_col == (`WIDTH - 1));
+        framebuffer2netppmfsm.start();
+        write_buff_index <= write_buff_index == 1 ? 0 : 1;
+    endrule
+
+    /*rule printbuffs(pal_line == (`HEIGHT - 1) && pal_col == `WIDTH);
+        print_buffs();
+    endrule*/
+
+    rule synching(n_sync_w == 0);
+        sync_length <= sync_length + 1;
+    endrule
+
+    rule end_sync(n_sync_w == 1);
+        if (sync_length >= 448) begin
+            pal_line <= -4;
+            pal_col <= -48;
+        end else if (sync_length >= 30) begin
+            pal_line <= pal_line + 1;
+            pal_col <= -48;
+        end
+        sync_length <= 0;
     endrule
 
     method Action n_hl(Bit#(1) h);
@@ -192,21 +259,13 @@ module mkPAL2Framebuffer(PAL2Framebuffer_ifc);
     endmethod
 
     method Action n_sync(Bit#(1) s);
-        if (s == 0) begin
-            sync_length <= sync_length + 1;
-        end else begin
-            if (sync_length >= 448) begin
-                pal_line <= 0;
-                framebuffer2netppm();
-            end
-            pal_col <= 0;
-            sync_length <= 0;
-        end
+        n_sync_w <= s;
     endmethod
 endmodule
 
+(* synthesize *)
 module mkDisplayGeneratorTb(Empty);
-    Reg#(UInt#(20)) step <- mkReg(0);
+    Reg#(UInt#(32)) step <- mkReg(0);
 
     PALGenerator_ifc palgen <- mkPALGenerator();
     PAL2Framebuffer_ifc pal2fb <- mkPAL2Framebuffer();
@@ -221,7 +280,7 @@ module mkDisplayGeneratorTb(Empty);
     endrule
 
     // 312 * 448
-    rule done(step > 150000);
+    rule done(step > 10000000);
         $finish();
     endrule
 endmodule

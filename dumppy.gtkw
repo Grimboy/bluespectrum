@@ -1,0 +1,37 @@
+[*]
+[*] GTKWave Analyzer v3.3.40 (w)1999-2012 BSI
+[*] Sun Nov 11 10:07:39 2012
+[*]
+[dumpfile] "/home/grimboy/partii_project/src/dump.vcd"
+[dumpfile_mtime] "Sun Nov 11 10:01:34 2012"
+[dumpfile_size] 15351160
+[savefile] "/home/grimboy/partii_project/src/dumppy.gtkw"
+[timestart] 5
+[size] 1918 1059
+[pos] -1 -1
+*-4.761329 10 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+[treeopen] main.
+[sst_width] 414
+[signals_width] 336
+[sst_expanded] 1
+[sst_vpaned_height] 312
+@28
+main.top.CLK
+main.top.\z80busman$RDY_server_request_put
+main.top.\z80busman$EN_server_request_put
+@29
+main.top.\z80busman$RDY_server_response_get
+@28
+main.top.\z80busman$EN_server_response_get
+@22
+main.top.\addr_probe$PROBE[15:0]
+main.top.\data_probe$PROBE[7:0]
+@28
+main.top.\n_iorq_out_probe$PROBE
+main.top.\n_mreq_out_probe$PROBE
+main.top.\n_rd_out_probe$PROBE
+main.top.\n_rfsh_out_probe$PROBE
+main.top.\n_wait_in_probe$PROBE
+main.top.\n_wr_out_probe$PROBE
+[pattern_trace] 1
+[pattern_trace] 0

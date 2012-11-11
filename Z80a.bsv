@@ -9,15 +9,19 @@ import Vector::*;
 import TriState::*;
 import Z80aTypes::*;
 import ConfigReg::*;
+import Probe::*;
+import Connectable::*;
+import StmtFSM::*;
+import StmtUtils::*;
 
 //import TraceUtils::*;
 
 // Next milestone: Z80 can execute LD reg, literal; LD reg, reg and ADD reg instructions loaded from ROM
 
-module mkDLWireU(Wire#(element_type))
+module mkDLWire#(element_type init) (Wire#(element_type))
     provisos (Bits#(element_type, element_width));
 
-    ConfigReg#(element_type) storage <- mkConfigRegU;
+    ConfigReg#(element_type) storage <- mkConfigReg(init);
     Wire#(element_type) internal_wire <- mkDWire(storage);
 
     method Action _write(element_type x1);
@@ -29,6 +33,9 @@ module mkDLWireU(Wire#(element_type))
         return internal_wire;
     endmethod
 endmodule
+
+function Module#(Wire#(element_type)) mkDLWireU
+    provisos (Bits#(element_type, element_width)) = mkDLWire(?);
 
 (* always_ready, always_enabled *)
 interface Z80a_ifc;
@@ -419,6 +426,253 @@ module mkALU(ALU_ifc);
     interface response = toGet(f_out);
 endmodule
 
+// Consider having AddrT and WordT?
+
+interface Z80Bus_ifc;
+    method Bit#(1) n_mreq(); // XXX: Should be tristate
+    method Bit#(1) n_iorq(); // "
+    method Bit#(1) n_rd(); // "
+    method Bit#(1) n_wr(); // "
+    method Bit#(1) n_rfsh();
+    method Bit#(16) addr();
+    interface Inout#(Bit#(8)) data;
+    method Action n_wait(Bit#(1) w);
+endinterface
+
+typedef union tagged {
+    Bit#(7) BPMemRdRfsh;
+    void BPMemRd;
+    Bit#(8) BPMemWrData;
+    void BPIORd;
+    Bit#(8) BPIOWrData;
+} BusRqPayloadT deriving (Bits, Eq, Bounded);
+
+typedef struct {
+    Bit#(16) addr;
+    BusRqPayloadT payload;
+} Z80BusManRqT deriving (Bits, Eq, Bounded);
+
+interface Z80BusManager_ifc;
+    interface Server#(Z80BusManRqT, Bit#(8)) server;
+    interface Z80Bus_ifc bus;
+endinterface
+
+(* synthesize *)
+module mkZ80BusManager(Z80BusManager_ifc);
+    // XXX: Could use M1 too
+    ConfigReg#(Maybe#(Z80BusManRqT)) req_reg <- mkConfigReg(tagged Invalid);
+    RWire#(Z80BusManRqT) req_in_wire <- mkRWire;
+    PulseWire inv_cur_req <- mkPulseWire;
+    Maybe#(Z80BusManRqT) cur_req_in = req_in_wire.wget() matches tagged Valid .* ? req_in_wire.wget() : req_reg;
+    Bool cur_req_out_valid = !inv_cur_req || (req_reg matches tagged Valid .* ? True : False);
+
+    ConfigReg#(UInt#(1)) tstate <- mkConfigReg(0);
+
+    Wire#(Bit#(1)) n_mreq_out <- mkBypassWire;
+    Wire#(Bit#(1)) n_iorq_out <- mkBypassWire;
+    Wire#(Bit#(1)) n_rd_out <- mkBypassWire;
+    Wire#(Bit#(1)) n_wr_out <- mkBypassWire;
+    Wire#(Bit#(1)) n_rfsh_out <- mkBypassWire;
+    Wire#(Bit#(1)) n_wait_in <- mkBypassWire;
+    Wire#(Bit#(16)) addr_out <- mkBypassWire;
+    RWire#(Bit#(8)) data_out <- mkRWire;
+    TriState#(Bit#(8)) data_tri <- mkTriState(isValid(data_out.wget()), fromMaybe(?, data_out.wget()));
+
+    Reg#(Bool) done_dumpvars <- mkReg(False);
+    rule dumpvars(!done_dumpvars);
+        $dumpvars();
+        done_dumpvars <= True;
+    endrule
+
+    rule do_memrdrfsh_s1_req(cur_req_in matches tagged Valid .req &&& req.payload matches tagged BPMemRdRfsh .rfshaddr &&& tstate == 0);
+        n_mreq_out <= 0; // should change on next neg edge
+        n_rd_out <= 0;
+        addr_out <= req.addr;
+    endrule
+
+    rule do_memrdrfsh_s2_req(req_reg matches tagged Valid .req &&& req.payload matches tagged BPMemRdRfsh .rfshaddr &&& tstate == 1);
+        n_mreq_out <= 0; // should change on next neg edge
+        addr_out <= req.addr;
+
+        req_reg <= tagged Invalid;
+        inv_cur_req.send();
+        tstate <= 0;
+    endrule
+
+    rule do_memrd_req(cur_req_in matches tagged Valid .req &&& req.payload matches tagged BPMemRd);
+        n_mreq_out <= 0; // should change on next neg edge
+        n_rd_out <= 0;
+        addr_out <= req.addr;
+    endrule
+
+    rule do_memwr_req(cur_req_in matches tagged Valid .req &&& req.payload matches tagged BPMemWrData .wrdata);
+        n_mreq_out <= 0; // should change on next neg edge
+        n_wr_out <= 0;
+        data_out.wset(wrdata);
+        addr_out <= req.addr;
+    endrule
+
+    rule do_iord_req(cur_req_in matches tagged Valid .req &&& req.payload matches tagged BPIORd);
+        n_iorq_out <= 0; // should change on next neg edge
+        n_rd_out <= 0;
+        addr_out <= req.addr;
+    endrule
+
+    rule do_iowr_req(cur_req_in matches tagged Valid .req &&& req.payload matches tagged BPIOWrData .wrdata);
+        n_iorq_out <= 0; // should change on next neg edge
+        n_wr_out <= 0;
+        data_out.wset(wrdata);
+        addr_out <= req.addr;
+    endrule
+
+    rule no_req(cur_req_in matches tagged Invalid);
+        n_mreq_out <= 1;
+        n_iorq_out <= 1;
+        n_rd_out <= 1;
+        n_wr_out <= 1;
+        n_rfsh_out <= 1;
+        addr_out <= ?;
+    endrule
+
+    interface Z80Bus_ifc bus;
+        method Bit#(1) n_mreq();
+            return n_mreq_out;
+        endmethod
+
+        method Bit#(1) n_iorq();
+            return n_iorq_out;
+        endmethod
+
+        method Bit#(1) n_rd();
+            return n_rd_out;
+        endmethod
+
+        method Bit#(1) n_wr();
+            return n_wr_out;
+        endmethod
+
+        method Bit#(1) n_rfsh();
+            return n_rfsh_out;
+        endmethod
+
+        method Bit#(16) addr();
+            return addr_out;
+        endmethod
+
+        interface data = data_tri.io;
+
+        method Action n_wait(Bit#(1) w);
+            n_wait_in <= w;
+        endmethod
+    endinterface
+
+    interface Server server;
+        interface Put request;
+            method Action put(Z80BusManRqT req) if (inv_cur_req || (req_reg matches tagged Invalid ? True : False));
+                req_in_wire.wset(req);
+                req_reg <= tagged Valid req;
+            endmethod
+        endinterface
+
+        interface Get response;
+            method ActionValue#(Bit#(8)) get() if ((n_wait_in != 0) &&& req_reg matches tagged Valid .req &&& tstate == 0); // wait should be sampled on previous neg clock edge
+                if (req.payload matches tagged BPMemRdRfsh .*) begin
+                    tstate <= 1;
+                end else begin
+                    req_reg <= tagged Invalid;
+                    inv_cur_req.send();
+                end
+                return data_tri;
+            endmethod
+        endinterface
+    endinterface
+endmodule
+
+(* synthesize *)
+module mkZ80BusManagerTb(Empty);
+    Z80BusManager_ifc z80busman <- mkZ80BusManager();
+    Z80Bus_ifc bus = z80busman.bus;
+    Server#(Z80BusManRqT, Bit#(8)) server = z80busman.server;
+
+    Wire#(Bit#(1)) n_wait_in <- mkDWire(0);
+    mkConnection(n_wait_in._read, bus.n_wait);
+
+    RWire#(Bit#(8)) data_out <- mkRWire;
+    TriState#(Bit#(8)) data_tri <- mkTriState(isValid(data_out.wget()), fromMaybe(?, data_out.wget()));
+    mkConnection(bus.data, data_tri.io);
+
+    // Probiness
+    Probe#(Bit#(1)) n_mreq_out_probe <- mkProbe();
+    mkConnection(bus.n_mreq, n_mreq_out_probe._write);
+    Probe#(Bit#(1)) n_iorq_out_probe <- mkProbe();
+    mkConnection(bus.n_iorq, n_iorq_out_probe._write);
+    Probe#(Bit#(1)) n_rd_out_probe <- mkProbe();
+    mkConnection(bus.n_rd, n_rd_out_probe._write);
+    Probe#(Bit#(1)) n_wr_out_probe <- mkProbe();
+    mkConnection(bus.n_wr, n_wr_out_probe._write);
+    Probe#(Bit#(1)) n_rfsh_out_probe <- mkProbe();
+    mkConnection(bus.n_rfsh, n_rfsh_out_probe._write);
+    Probe#(Bit#(1)) n_wait_in_probe <- mkProbe();
+    mkConnection(n_wait_in, n_wait_in_probe._write);
+    Probe#(Bit#(16)) addr_probe <- mkProbe();
+    mkConnection(bus.addr, addr_probe._write);
+    Probe#(Bit#(8)) data_probe <- mkProbe();
+    mkConnection(data_tri._read, data_probe._write);
+
+    mkAutoFSM(seq
+        server.request.put(Z80BusManRqT{
+            payload: tagged BPMemRdRfsh 101,
+            addr: 4242
+        });
+        par
+            data_out.wset(77);
+            n_wait_in <= 1;
+            $display("M1 read %d", server.response.get());
+        endpar
+        server.request.put(Z80BusManRqT{
+            payload: tagged BPMemRd,
+            addr: 4244
+        });
+        par
+            data_out.wset(79);
+            n_wait_in <= 1;
+            $display("M1 read %d", server.response.get());
+        endpar
+        server.request.put(Z80BusManRqT{
+            payload: tagged BPIORd,
+            addr: 4246
+        });
+        noAction;
+        par
+            n_wait_in <= 1;
+            data_out.wset(81);
+            $display("IO read %d", server.response.get());
+        endpar
+        noAction;
+        server.request.put(Z80BusManRqT{
+            payload: tagged BPMemWrData 42,
+            addr: 4248
+        });
+        noAction;
+        par
+            n_wait_in <= 1;
+            dropAV(server.response.get());
+            $display("Normal write finished");
+        endpar
+        noAction;
+        server.request.put(Z80BusManRqT{
+            payload: tagged BPIOWrData 42,
+            addr: 4250
+        });
+        noAction;
+        par
+            n_wait_in <= 1;
+            dropAV(server.response.get());
+            $display("Normal read finished");
+        endpar
+        noAction;
+    endseq);
+endmodule
 
 interface RegisterFileIfc;
     // other
@@ -467,4 +721,3 @@ module mkRegisterFile(RegisterFileIfc); // Use RegFile module?
 endmodule
 
 endpackage
-

@@ -13,8 +13,10 @@ module mkFuseTest(Empty);
     Z80a_ifc cpu <- mkZ80a();
     TestDRAM_ifc dram <- mkTestDRAM("testinit.rmh", "testprog.rmh");
 
-    mkConnection(cpu.data, dram.data);
-    mkConnection(cpu.addr, dram.addr);
+    mkConnection(cpu.bus.data, dram.data);
+    mkConnection(cpu.bus.addr, dram.addr);
+    mkConnection(cpu.bus.n_wr, dram.n_wr);
+    //method Action n_wait(Bit#(1) w);
 
     Probe#(Bit#(1)) n_m1_probe <- mkProbe();
     Probe#(Bit#(1)) n_mreq_probe <- mkProbe();
@@ -28,7 +30,7 @@ module mkFuseTest(Empty);
     Probe#(Bit#(8)) dram_data_probe <- mkProbe();
 
     TriState#(Bit#(8)) cpu_data_probe_tri <- mkTriState(False, ?);
-    mkConnection(cpu.data, cpu_data_probe_tri.io);
+    mkConnection(cpu.bus.data, cpu_data_probe_tri.io);
     TriState#(Bit#(8)) dram_data_probe_tri <- mkTriState(False, ?);
     mkConnection(dram.data, dram_data_probe_tri.io);
 
@@ -37,20 +39,20 @@ module mkFuseTest(Empty);
     endrule
 
     rule probes;
-        n_m1_probe <= cpu.n_m1();
-        n_mreq_probe <= cpu.n_mreq();
-        n_iorq_probe <= cpu.n_iorq();
-        n_rd_probe <= cpu.n_rd();
-        n_wr_probe <= cpu.n_wr();
-        n_rfsh_probe <= cpu.n_rfsh();
+        n_m1_probe <= cpu.bus.n_m1();
+        n_mreq_probe <= cpu.bus.n_mreq();
+        n_iorq_probe <= cpu.bus.n_iorq();
+        n_rd_probe <= cpu.bus.n_rd();
+        n_wr_probe <= cpu.bus.n_wr();
+        n_rfsh_probe <= cpu.bus.n_rfsh();
         n_busack_probe <= cpu.n_busack();
-        addr_probe <= cpu.addr();
+        addr_probe <= cpu.bus.addr();
         cpu_data_probe <= cpu_data_probe_tri;
         dram_data_probe <= dram_data_probe_tri;
     endrule
 
     rule dont_wait;
-        cpu.n_wait(1);
+        cpu.bus.n_wait(1);
     endrule
 
     rule inc_cycle;

@@ -9,12 +9,13 @@ import TriState::*;
 import RegFile::*;
 import List::*;
 
-`define INIT_SIZE 16
+`define INIT_SIZE 55
 
 (* always_ready, always_enabled *)
 interface TestDRAM_ifc;
     // system control
     method Action cs(Bit#(1) cs);
+    method Action n_wr(Bit#(1) n_wr);
     method Action n_oe(Bit#(1) n_oe);
     method Action n_ce(Bit#(1) n_ce);
 
@@ -25,9 +26,10 @@ interface TestDRAM_ifc;
     interface Inout#(Bit#(8)) data;
 endinterface
 
-//(* synthesize *)
-module mkTestDRAM#(String initfile, String progfile)(TestDRAM_ifc);
+(* synthesize *)
+module mkTestDRAM#(parameter String initfile, parameter String progfile)(TestDRAM_ifc);
     Wire#(Bit#(1)) cs_in <- mkBypassWire;
+    Wire#(Bit#(1)) n_wr_in <- mkBypassWire;
     Wire#(Bit#(1)) n_oe_in <- mkBypassWire;
     Wire#(Bit#(1)) n_ce_in <- mkBypassWire;
 
@@ -43,6 +45,10 @@ module mkTestDRAM#(String initfile, String progfile)(TestDRAM_ifc);
         cs_in <= c;
     endmethod
 
+    method Action n_wr(Bit#(1) w);
+        n_wr_in <= w;
+    endmethod
+
     method Action n_oe(Bit#(1) o);
         n_oe_in <= o;
     endmethod
@@ -53,9 +59,16 @@ module mkTestDRAM#(String initfile, String progfile)(TestDRAM_ifc);
 
     // address bus
     method Action addr(Bit#(16) a);
-        data_out.wset(ram.sub(a));
-        if (a >= `INIT_SIZE)
-            init_done <= True;
+        if (n_wr_in > 0) begin
+            data_out.wset(ram.sub(a));
+            $display("Read address %h: %h", a, ram.sub(a));
+            if (a == `INIT_SIZE) begin
+                $display("Swapping RAMs");
+                init_done <= True;
+            end
+        end else begin
+            ram.upd(a, data_tri);
+        end
     endmethod
 
     // data bus

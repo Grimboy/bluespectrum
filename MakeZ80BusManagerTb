@@ -4,11 +4,11 @@
 #
 
 BSC=bsc
-BSCFLAGS=-keep-fires -cross-info
+BSCFLAGS=-keep-fires -cross-info +RTS -K256M -RTS -steps 100000000 -steps-warn-interval 10000000 -D testnum=${TESTNUM}
 SUFFIXES=
 
-TOPMOD = mkSpectrumTb
-TOPFILE = Testbench.bsv
+TOPMOD = mkZ80BusManagerTb
+TOPFILE = Z80a.bsv
 TOPPACK = $(basename $(TOPFILE))
 SIMULATOR = iverilog
 
@@ -59,7 +59,7 @@ help:
 build:	$(TOPPACK).bo
 
 # compile and link the whole system
-$(TOPPACK).bo: $(SRCS) MakeTestbench 
+$(TOPPACK).bo: $(SRCS)
 	$(FILECMD)
 	$(CMD1)
 

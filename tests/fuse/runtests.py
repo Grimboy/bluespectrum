@@ -2,8 +2,8 @@ import os, sys, subprocess
 
 sys.setrecursionlimit(1000000)
 
-tests_in_f = open(sys.argv[1])
-tests_expected_f = open(sys.argv[2])
+tests_in_f = open("tests.in")
+tests_expected_f = open("tests.expected")
 
 REGFILE_NAMES = ["af", "bc", "de", "hl",
                  "af_", "bc_", "de_", "hl_",
@@ -108,6 +108,11 @@ try:
 except StopIteration:
     pass
 
+
+if not os.path.exists("testdata"):
+    os.mkdir("testdata")
+
+os.chdir("testdata")
 for test in tests:
     if not os.path.exists(test['comment']):
         os.mkdir(test['comment'])
@@ -124,6 +129,8 @@ for test in tests:
     init.write("\tld r, a\n")
     if test['auxstate_in'][2] == "1":
         init.write("\tei\n")
+    else:
+        init.write("\tdi\n")
     # XXX: Can't support iff2 this way
     init.write("\tim %s\n" % test['auxstate_in'][4])
 
@@ -153,7 +160,7 @@ for test in tests:
     init.close()
     subprocess.call(["sdasz80", "-o", "init.rel", "init.asm"])
     subprocess.call(["sdldz80", "-i", "init.ihx", "init.rel"])
-    subprocess.call(["python3", "../ihx2rmh.py", "init.ihx", "16k"])
+    subprocess.call(["python3", "../../ihx2rmh.py", "init.ihx", "16k"])
     # make run.rmh
     prog = open("prog.rmh", 'w')
     for addr, run in test['minit'].items():
@@ -163,15 +170,15 @@ for test in tests:
         prog.write("76\n")
     prog.close()
     # run the test
-    os.chdir("../../..")
+    os.chdir("../../../..")
     if os.path.exists("testinit.rmh"):
         os.remove("testinit.rmh")
-    os.symlink("tests/fuse/%s/init.rmh" % (test['comment'],), "testinit.rmh")
+    os.symlink("tests/fuse/testdata/%s/init.rmh" % (test['comment'],), "testinit.rmh")
     if os.path.exists("testprog.rmh"):
         os.remove("testprog.rmh")
-    os.symlink("tests/fuse/%s/prog.rmh" % (test['comment'],), "testprog.rmh")
+    os.symlink("tests/fuse/testdata/%s/prog.rmh" % (test['comment'],), "testprog.rmh")
     actual_output = subprocess.check_output(["./mkFuseTest"])
     # compare the output
     print actual_output
     break
-    os.chdir("tests/fuse")
+    os.chdir("tests/fuse/testdata")

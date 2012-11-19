@@ -416,11 +416,11 @@ function DecodedInstructionT decode_simple(Bit#(8) inst, IncompleteInstructionT 
                     1: case (p)
                         0: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // RET
                         1: return DecodedInstructionT{op: OpExGP, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // EXX
-                        2: return DecodedInstructionT{op: OpJp, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged DirectOperand tagged DOReg16 HL, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // JP HL
+                        2: return DecodedInstructionT{op: OpJp, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged DirectOperand tagged DOReg16 RgHL, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // JP HL
                         3: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // LD SP,HL
                     endcase
                 endcase
-                2: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged DirectOperand tagged DO, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // JP cc[y], nn
+                2: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // XXX: Unimplemented // JP cc[y], nn
                 3: case(y)
                     0: return DecodedInstructionT{op: OpJp, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged DirectOperand tagged DONext16Bits, src2: tagged NoOperand, displacement: False, incomp: IncNo}; // JP nn
                     1: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, displacement: False, incomp: IncBits}; // (CB prefix)

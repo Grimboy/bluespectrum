@@ -61,53 +61,12 @@ def get_test():
         res['mchanged'][line_bits[0]] = line_bits[1:]
     return res
 
-def h(x, b=16):
-    return "%d'h%s" % (b, x)
-
-def list2consstr(l, s):
-    if len(l) == 0:
-        return "Nil"
-    else:
-        return "cons(" + s(l[0]) + ", " + list2consstr(l[1:], s) + ")"
-
-def fmt_minit_run(run):
-    payload = list2consstr(run[1], lambda y: h(y, 8))
-    return "MemoryRunT{startaddr: %s, payload: %s}" % (h(run[0]), payload)
-
-def fmt_minit_run_list(run_list):
-    return list2consstr(run_list.items(), fmt_minit_run)
-
-def fmt_state(regfile, auxstate):
-    return "Z80StateT{%s, %s}" % (
-        ', '.join(x + ': ' + h(y) for x, y in zip(REGFILE_NAMES, regfile)), 
-        ', '.join(y[0] + ': ' + (h(y[1], 8) if (x < 2) else y[1]) for x, y in enumerate(zip(AUXSTATE_NAMES, auxstate))), 
-    )
-
-def fmt_event(event):
-    return "EventT{time_: %s, type_: Ev%s, addr: %s, data: %s}" % (
-        event[0],
-        event[1],
-        h(event[2]),
-        h(event[3], 8),
-    )
-
-def fmt_test(test):
-    return """\nTestT{comment: "%s", state_in: %s, minit: %s, state_out: %s, events: %s, mchanged: %s}""" % (
-        test['comment'], 
-        fmt_state(test['regfile_in'], test['auxstate_in']),
-        fmt_minit_run_list(test['minit']),
-        fmt_state(test['regfile_out'], test['auxstate_out']),
-        list2consstr(test['events'], fmt_event),
-        fmt_minit_run_list(test['mchanged']),
-    )
-
 try:
     tests = []
     while 1:
         tests.append(get_test())
 except StopIteration:
     pass
-
 
 if not os.path.exists("testdata"):
     os.mkdir("testdata")
@@ -178,7 +137,18 @@ for test in tests:
         os.remove("testprog.rmh")
     os.symlink("tests/fuse/testdata/%s/prog.rmh" % (test['comment'],), "testprog.rmh")
     actual_output = subprocess.check_output(["./mkFuseTest"])
-    # compare the output
+    #print actual_output
+    actual_output = "\n".join(line[2:] for line in actual_output.split("\n") if line.startswith("**"))
+    print "***** TEST %s *****" % (test['comment'],)
+    print "Expected regfile"
+    print test['regfile_out']
+    print "Expected events"
+    print test['events']
+    print "Expected memory"
+    print test['mchanged']
+    print "Actual regfile"
+    print "Actual events"
     print actual_output
-    break
+    print "Actual memory"
+    dumpfile = open("dram_dump.rmh")
     os.chdir("tests/fuse/testdata")

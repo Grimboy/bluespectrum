@@ -8,7 +8,7 @@ import TriState::*;
 import Probe::*;
 
 module mkFuseTest(Empty);
-    Reg#(UInt#(8)) cycle <- mkReg(0);
+    Reg#(UInt#(64)) cycle <- mkReg(0);
 
     Z80a_ifc cpu <- mkZ80a();
     TestDRAM_ifc dram <- mkTestDRAM("testinit.rmh", "testprog.rmh");
@@ -59,10 +59,14 @@ module mkFuseTest(Empty);
        cycle <= cycle + 1;
     endrule
 
-    rule finished(cycle > 200);
-        $display("Test timed out after 200 cycles");
-        $finish(-1);
+    rule memdump_on_halt(cpu.n_halt() == 0);
+        dram.dump();
     endrule
+
+    //rule finished(cycle > 200);
+        //$display("Test timed out after 200 cycles");
+        //$finish(-1);
+    //endrule
 endmodule
 
 endpackage

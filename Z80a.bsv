@@ -61,6 +61,7 @@ module mkZ80a(Z80a_ifc);
 
     // Input/Output Wires
     Wire#(Bit#(1)) n_m1_out <- mkDLWireU;
+    Wire#(Bit#(1)) n_halt_wire <- mkDWire(1);
 
     // Cyclic state
     Reg#(UInt#(3)) mem_cycle <- mkReg(0);
@@ -91,6 +92,8 @@ module mkZ80a(Z80a_ifc);
     Reg#(Bit#(8)) res <- mkRegU;
     Reg#(Bit#(8)) tmp8 <- mkRegU;
     RegisterFileIfc rf <- mkRegisterFile;
+
+    Reg#(Bool) halted <- mkReg(False);
 
     // Decoded
     ConfigReg#(DecodedInstructionT) decoded <- mkConfigRegU;
@@ -139,6 +142,10 @@ module mkZ80a(Z80a_ifc);
             need_displacement <= d.displacement;
         end
         bytes_read <= bytes_read + 1;
+    endrule
+
+    rule nop(if_done && decoded.op == OpNop);
+        next_instruction();
     endrule
 
     /*** Ld16 ***/
@@ -192,14 +199,25 @@ module mkZ80a(Z80a_ifc);
 
     /*** JUMP/BRANCH ***/
 
-    rule op_jp(if_done && decoded.op == OpJp &&& decoded.src1 matches tagged DirectOperand tagged DONext16Bits);
+    rule op_jp_readstart(if_done && decoded.op == OpJp &&& decoded.src1 matches tagged DirectOperand (tagged DONext16Bits));
         bus_man.server.request.put(Z80BusManRqT{
             addr: pc,
             payload: BPMemRd
         });
         pc <= pc + 1;
     endrule
-    
+
+    rule op_jp_readfin(if_done && decoded.op == OpJp &&& decoded.src1 matches tagged DirectOperand (tagged DONext16Bits));
+        if (mem_cycle == 0) begin
+            mem_cycle <= 1;
+            storeAV(bus_man.server.response.get(), res);
+        end else begin
+            let jpaddrhigh <- bus_man.server.response.get();
+            pc <= {jpaddrhigh, res};
+            next_instruction();
+        end
+    endrule
+
     /*** SWAP ***/
 
     rule op_exaf(if_done && decoded.op == OpExAF);
@@ -299,13 +317,15 @@ module mkZ80a(Z80a_ifc);
         next_instruction();
     endrule
 
-    rule halt(if_done && decoded.op == OpHalt);
-        $finish();
+    rule op_halt(if_done && decoded.op == OpHalt && !halted);
+        halted <= True;
+        n_halt_wire <= 0;
+        rf.trace_regs(pc);
     endrule
 
     /*** Trace ***/
 
-    rule trace_regs;
+    rule trace_regs(!halted);
         $display("pc: %h m: %h s: %h i: %h res: %h",
             pc, mem_cycle, sub_cycle, instr_b1, res);
         $display("a: %h f: %h b: %h c: %h d: %h e: %h h: %h l: %h w: %h z: %h s: %h p: %h i: %h r: %h",
@@ -322,7 +342,7 @@ module mkZ80a(Z80a_ifc);
 
     // cpu control
     method Bit#(1) n_halt();
-        return 0;
+        return n_halt_wire;
     endmethod
 
     method Action n_int(Bit#(1) i);
@@ -435,7 +455,8 @@ module mkZ80BusManager(Z80BusManager_ifc);
     Maybe#(Z80BusManRqT) cur_req_in = req_in_wire.wget() matches tagged Valid .* ? req_in_wire.wget() : req_reg;
     Bool cur_req_out_valid = !inv_cur_req || (req_reg matches tagged Valid .* ? True : False);
 
-    ConfigReg#(UInt#(1)) tstate <- mkConfigReg(0);
+    ConfigReg#(Bool) doing_rfsh <- mkConfigReg(False);
+    ConfigReg#(UInt#(64)) tstate_count <- mkConfigReg(0);
 
     // utilise default wires more
     Wire#(Bit#(1)) n_m1_out <- mkBypassWire;
@@ -449,21 +470,25 @@ module mkZ80BusManager(Z80BusManager_ifc);
     RWire#(Bit#(8)) data_out <- mkRWire;
     TriState#(Bit#(8)) data_tri <- mkTriState(isValid(data_out.wget()), fromMaybe(?, data_out.wget()));
 
-    rule do_memrdrfsh_s1_req(cur_req_in matches tagged Valid .req &&& req.payload matches tagged BPMemRdRfsh .rfshaddr &&& tstate == 0);
+    rule tstate_inc;
+        tstate_count <= tstate_count + 1;
+    endrule
+
+    rule do_memrdrfsh_s1_req(cur_req_in matches tagged Valid .req &&& req.payload matches tagged BPMemRdRfsh .rfshaddr &&& !doing_rfsh);
         n_m1_out <= 0;
         n_mreq_out <= 0; // should change on next neg edge
         n_rd_out <= 0;
         addr_out <= req.addr;
     endrule
 
-    rule do_memrdrfsh_s2_req(req_reg matches tagged Valid .req &&& req.payload matches tagged BPMemRdRfsh .rfshaddr &&& tstate == 1);
+    rule do_memrdrfsh_s2_req(req_reg matches tagged Valid .req &&& req.payload matches tagged BPMemRdRfsh .rfshaddr &&& doing_rfsh);
         n_m1_out <= 0;
         n_mreq_out <= 0; // should change on next neg edge
         addr_out <= req.addr;
 
         req_reg <= tagged Invalid;
         inv_cur_req.send();
-        tstate <= 0;
+        doing_rfsh <= False;
     endrule
 
     rule do_memrd_req(cur_req_in matches tagged Valid .req &&& req.payload matches tagged BPMemRd);
@@ -542,13 +567,38 @@ module mkZ80BusManager(Z80BusManager_ifc);
             method Action put(Z80BusManRqT req) if (inv_cur_req || (req_reg matches tagged Invalid ? True : False));
                 req_in_wire.wset(req);
                 req_reg <= tagged Valid req;
+
+                // tracy
+                String access_type = "";
+                Fmt access_data = $format("");
+                case (req.payload) matches
+                    tagged BPMemRdRfsh .*: begin
+                        access_type = "MR";
+                    end
+                    tagged BPMemRd: begin
+                        access_type = "MR";
+                    end
+                    tagged BPMemWrData .data: begin
+                        access_type = "MW";
+                        access_data = $format("%h", data);
+                    end
+                    tagged BPIORd: begin
+                        access_type = "PR";
+                    end
+                    tagged BPIOWrData .data: begin
+                        access_type = "PW";
+                        access_data = $format("%h", data);
+                    end
+                endcase
+                $write("**%d\t%s\t%h\t", tstate_count, access_type, req.addr);
+                $display(access_data);
             endmethod
         endinterface
 
         interface Get response;
-            method ActionValue#(Bit#(8)) get() if ((n_wait_in != 0) &&& req_reg matches tagged Valid .req &&& tstate == 0); // wait should be sampled on previous neg clock edge
+            method ActionValue#(Bit#(8)) get() if ((n_wait_in != 0) &&& req_reg matches tagged Valid .req &&& !doing_rfsh); // wait should be sampled on previous neg clock edge
                 if (req.payload matches tagged BPMemRdRfsh .*) begin
-                    tstate <= 1;
+                    doing_rfsh <= True;
                 end else begin
                     req_reg <= tagged Invalid;
                     inv_cur_req.send();
@@ -654,6 +704,7 @@ interface RegisterFileIfc;
     method Bit#(16) read_16b(Reg16T regg);
     method Action swap_af();
     method Action swap_gp();
+    method Action trace_regs(Bit#(16) pc);
 endinterface
 
 module mkRegisterFile(RegisterFileIfc); // Use RegFile module?
@@ -674,6 +725,17 @@ module mkRegisterFile(RegisterFileIfc); // Use RegFile module?
     function Tuple2#(Reg8T, Reg8T) reg16s_regs(Reg16T regg);
         return tuple2(unpack(extend(pack(regg) * 2)), unpack(extend(pack(regg) * 2 + 1)));
     endfunction
+
+    method Action trace_regs(Bit#(16) pc);
+        $display("**%h%h %h%h %h%h %h%h %h%h %h%h %h%h %h%h %h%h %h%h %h%h %h",
+            rf[0], rf[1], rf[2], rf[3],
+            rf[4], rf[5], rf[6], rf[7],
+            rf_shad[0], rf_shad[1], rf_shad[2], rf_shad[3],
+            rf_shad[4], rf_shad[5], rf_shad[6], rf_shad[7],
+            rf[12], rf[13], rf[14], rf[15],
+            rf[10], rf[11], pc
+        );
+    endmethod
 
     method Action write_8b(Reg8T regg, Bit#(8) data);
         regreg(regg) <= data;

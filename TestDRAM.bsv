@@ -101,6 +101,7 @@ module mkTestDRAM#(parameter String initfile, parameter String progfile)(TestDRA
                         $display("Swapped RAMs");
                 end
             end else begin
+                $display("Wrote address %h: %h", a, data_tri);
                 ram.upd(a, data_tri);
             end
     endmethod

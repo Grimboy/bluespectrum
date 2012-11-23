@@ -60,7 +60,6 @@ module mkZ80a(Z80a_ifc);
     Z80BusManager_ifc bus_man <- mkZ80BusManager;
 
     // Input/Output Wires
-    Wire#(Bit#(1)) n_m1_out <- mkDLWireU;
     Wire#(Bit#(1)) n_halt_wire <- mkDWire(1);
 
     // Cyclic state
@@ -237,7 +236,7 @@ module mkZ80a(Z80a_ifc);
         mem_cycle <= mem_cycle + 1;
     endrule
 
-    rule push_stackwritestart(mem_cycle > 0 && decoded.op == OpPush &&& decoded.src1 matches tagged DirectOperand (tagged DOReg16 .r));
+    rule push_stackwritestart(if_done &&& mem_cycle > 0 && decoded.op == OpPush &&& decoded.src1 matches tagged DirectOperand (tagged DOReg16 .r));
         if (mem_cycle == 1)
             bus_man.server.request.put(Z80BusManRqT{
                 addr: rf.read_16b(RgSP),
@@ -250,7 +249,7 @@ module mkZ80a(Z80a_ifc);
             });
     endrule
 
-    rule push_stackwritedone(mem_cycle > 0 && decoded.op == OpPush);
+    rule push_stackwritedone(if_done &&& mem_cycle > 0 && decoded.op == OpPush);
         dropAV(bus_man.server.response.get());
         if (mem_cycle == 1) begin
             rf.write_16b(RgSP, rf.read_16b(RgSP) - 1);
@@ -723,7 +722,7 @@ module mkRegisterFile(RegisterFileIfc); // Use RegFile module?
     endfunction
 
     function Tuple2#(Reg8T, Reg8T) reg16s_regs(Reg16T regg);
-        return tuple2(unpack(extend(pack(regg) * 2)), unpack(extend(pack(regg) * 2 + 1)));
+        return tuple2(unpack(extend(pack(regg)) * 2), unpack(extend(pack(regg)) * 2 + 1));
     endfunction
 
     method Action trace_regs(Bit#(16) pc);

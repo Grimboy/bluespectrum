@@ -1,6 +1,4 @@
-import os, sys, subprocess
-
-sys.setrecursionlimit(1000000)
+import os, sys, subprocess, StringIO
 
 tests_in_f = open("tests.in")
 tests_expected_f = open("tests.expected")
@@ -10,6 +8,20 @@ REGFILE_NAMES = ["af", "bc", "de", "hl",
                  "ix", "iy", "sp", "pc"]
 
 AUXSTATE_NAMES = ["i", "r", "iff1", "iff2", "im", "halted", "tstates"]
+
+def get_events(stream):
+    events = []
+    while 1:
+        pos = stream.tell()
+        line = stream.readline()
+        if line[0] != " ":
+            stream.seek(pos)
+            break
+        bits = line.split()
+        bits[0] = int(bits[0])
+        bits[2:] = [int(bit, 16) for bit in bits[2:]]
+        events.append(bits)
+    return events
 
 def get_test():
     res = {}
@@ -31,7 +43,6 @@ def get_test():
             raise StopIteration
         line_bits = line.split()[:-1]
         res['minit'][line_bits[0]] = line_bits[1:]
-
     # tests.expected
     while 1:
         comment = tests_expected_f.readline()
@@ -39,16 +50,7 @@ def get_test():
             sys.stdout.flush()
             assert comment[:-1] == res['comment']
             break
-    res['events'] = []
-    while 1:
-        pos = tests_expected_f.tell()
-        line = tests_expected_f.readline()
-        if line[0] != " ":
-            tests_expected_f.seek(pos)
-            break
-        bits = line.split()
-        bits.append("00")
-        res['events'].append(bits)
+    res['events'] = get_events(tests_expected_f)
     res['regfile_out'] = tests_expected_f.readline().split()
     res['auxstate_out'] = tests_expected_f.readline().split()
     res['mchanged'] = {}
@@ -61,22 +63,10 @@ def get_test():
         res['mchanged'][line_bits[0]] = line_bits[1:]
     return res
 
-try:
-    tests = []
-    while 1:
-        tests.append(get_test())
-except StopIteration:
-    pass
-
-if not os.path.exists("testdata"):
-    os.mkdir("testdata")
-
-os.chdir("testdata")
-for test in tests:
+def run_test(test):
     if not os.path.exists(test['comment']):
         os.mkdir(test['comment'])
     os.chdir(test['comment'])
-    print test
     # make init.rmh
     init = open("init.asm", 'w')
     init.write("\t.area code (abs)\n")
@@ -119,15 +109,27 @@ for test in tests:
     init.close()
     subprocess.call(["sdasz80", "-o", "init.rel", "init.asm"])
     subprocess.call(["sdldz80", "-i", "init.ihx", "init.rel"])
-    subprocess.call(["python3", "../../ihx2rmh.py", "init.ihx", "16k"])
+    subprocess.call(["python2", "../../ihx2rmhnbin.py", "init.ihx", "16k"])
     # make run.rmh
     prog = open("prog.rmh", 'w')
+    prog_bin = open("prog.bin", 'wb')
+    prog_bin_i = 0
     for addr, run in test['minit'].items():
         prog.write("@%s\n" % (addr,))
+        addr_n = int(addr, 16)
+        while prog_bin_i < addr_n:
+            prog_bin.write(chr(0))
+            prog_bin_i += 1
         for word in run:
             prog.write(word + "\n")
+            prog_bin.write(chr(int(word, 16)))
+            prog_bin_i += 1
         prog.write("76\n")
+        prog_bin.write(chr(0x76))
+        prog_bin_i += 1
     prog.close()
+    prog_bin.close()
+    dissassembly = subprocess.check_output(["z80dasm", "-atg", "0", "prog.bin"]).split("\n")
     # run the test
     os.chdir("../../../..")
     if os.path.exists("testinit.rmh"):
@@ -136,10 +138,26 @@ for test in tests:
     if os.path.exists("testprog.rmh"):
         os.remove("testprog.rmh")
     os.symlink("tests/fuse/testdata/%s/prog.rmh" % (test['comment'],), "testprog.rmh")
-    actual_output = subprocess.check_output(["./mkFuseTest"])
-    #print actual_output
-    actual_output = "\n".join(line[2:] for line in actual_output.split("\n") if line.startswith("**"))
+
     print "***** TEST %s *****" % (test['comment'],)
+    print "Disassembled test:"
+    for addr, run in test['minit'].items():
+        addr_n = int(addr, 16)
+        print addr + ":"
+        for line in dissassembly[addr_n+5:]:
+            print line
+            if line.strip().startswith("halt"):
+                break
+    print "Initial regfile"
+    print test['regfile_in']
+    print "Running..."
+    actual_output = subprocess.check_output(["./mkFuseTest"])
+    print "Done"
+    actual_output = "\n".join(line[2:] for line in actual_output.split("\n") if line.startswith("**"))
+    actual_output_stream = StringIO.StringIO(actual_output)
+    actual_events = get_events(actual_output_stream)
+    actual_events = [[e[0] - 140] + e[1:] for e in actual_events[65:-1]]
+    actual_regfile = actual_output_stream.readline().split()
     print "Expected regfile"
     print test['regfile_out']
     print "Expected events"
@@ -147,8 +165,35 @@ for test in tests:
     print "Expected memory"
     print test['mchanged']
     print "Actual regfile"
+    print actual_regfile 
     print "Actual events"
-    print actual_output
+    print actual_events
     print "Actual memory"
     dumpfile = open("dram_dump.rmh")
+    dump = dumpfile.read().split('\n')
+    mactual = {}
+    for addr, run in test['mchanged'].items():
+        addr_n = int(addr, 16)
+        mactual[addr] = []
+        for i in xrange(len(run)):
+            mactual[addr].append(dump[addr_n + i + 1][:-1])
+    print mactual
     os.chdir("tests/fuse/testdata")
+
+try:
+    tests = []
+    while 1:
+        tests.append(get_test())
+except StopIteration:
+    pass
+
+if not os.path.exists("testdata"):
+    os.mkdir("testdata")
+
+os.chdir("testdata")
+
+if len(sys.argv) > 1:
+    run_test(tests[int(sys.argv[1])])
+else:
+    for test in tests:
+        run_test(test)

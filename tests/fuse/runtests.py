@@ -1,5 +1,8 @@
-import os, sys, subprocess, StringIO
+#!/usr/bin/python2
 
+import os, sys, subprocess, StringIO, atexit
+
+process = None
 tests_in_f = open("tests.in")
 tests_expected_f = open("tests.expected")
 
@@ -14,7 +17,7 @@ def get_events(stream):
     while 1:
         pos = stream.tell()
         line = stream.readline()
-        if line[0] != " ":
+        if len(line) == 0 or line[0] != " ":
             stream.seek(pos)
             break
         bits = line.split()
@@ -64,6 +67,7 @@ def get_test():
     return res
 
 def run_test(test):
+    global process
     if not os.path.exists(test['comment']):
         os.mkdir(test['comment'])
     os.chdir(test['comment'])
@@ -115,15 +119,17 @@ def run_test(test):
     prog_bin = open("prog.bin", 'wb')
     prog_bin_i = 0
     for addr, run in test['minit'].items():
-        prog.write("@%s\n" % (addr,))
         addr_n = int(addr, 16)
         while prog_bin_i < addr_n:
-            prog_bin.write(chr(0))
+            prog.write("76\n")
+            prog_bin.write(chr(0x76))
             prog_bin_i += 1
+        prog.write("@%s\n" % (addr,))
         for word in run:
             prog.write(word + "\n")
             prog_bin.write(chr(int(word, 16)))
             prog_bin_i += 1
+    while prog_bin_i < 0x10000:
         prog.write("76\n")
         prog_bin.write(chr(0x76))
         prog_bin_i += 1
@@ -151,7 +157,8 @@ def run_test(test):
     print "Initial regfile"
     print test['regfile_in']
     print "Running..."
-    actual_output = subprocess.check_output(["./mkFuseTest"])
+    process = subprocess.Popen(["./mkFuseTest"], stdout=subprocess.PIPE)
+    actual_output, _ = process.communicate()
     print "Done"
     actual_output = "\n".join(line[2:] for line in actual_output.split("\n") if line.startswith("**"))
     actual_output_stream = StringIO.StringIO(actual_output)
@@ -176,9 +183,17 @@ def run_test(test):
         addr_n = int(addr, 16)
         mactual[addr] = []
         for i in xrange(len(run)):
-            mactual[addr].append(dump[addr_n + i + 1][:-1])
+            mactual[addr].append(dump[addr_n + i + 1])
     print mactual
     os.chdir("tests/fuse/testdata")
+
+@atexit.register
+def kill_subprocess():
+    if process:
+        try:
+            process.kill()
+        except OSError:
+            pass
 
 try:
     tests = []

@@ -1,6 +1,7 @@
 package FuseTest;
 
-import Z80a::*;
+import Z80::*;
+import Z80BusMan::*;
 import TestDRAM::*;
 import Connectable::*;
 import List::*;

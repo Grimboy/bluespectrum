@@ -112,7 +112,7 @@ def run_test(test):
 
     init.close()
     subprocess.call(["sdasz80", "-o", "init.rel", "init.asm"])
-    subprocess.call(["sdldz80", "-i", "init.ihx", "init.rel"])
+    subprocess.check_output(["sdldz80", "-i", "init.ihx", "init.rel"])
     subprocess.call(["python2", "../../ihx2rmhnbin.py", "init.ihx", "16k"])
     # make run.rmh
     prog = open("prog.rmh", 'w')
@@ -135,8 +135,8 @@ def run_test(test):
         prog_bin_i += 1
     prog.close()
     prog_bin.close()
-    dissassembly = subprocess.check_output(["z80dasm", "-atg", "0", "prog.bin"]).split("\n")
     # run the test
+    dissassembly = subprocess.check_output(["z80dasm", "-atg", "0", "prog.bin"]).split("\n")
     os.chdir("../../../..")
     if os.path.exists("testinit.rmh"):
         os.remove("testinit.rmh")
@@ -158,12 +158,15 @@ def run_test(test):
     print test['regfile_in']
     print "Running..."
     process = subprocess.Popen(["./mkFuseTest"], stdout=subprocess.PIPE)
-    actual_output, _ = process.communicate()
+    actual_output, status = process.communicate()
     print "Done"
+    if status == -1:
+        print "Fail - timed out"
+        return False
     actual_output = "\n".join(line[2:] for line in actual_output.split("\n") if line.startswith("**"))
     actual_output_stream = StringIO.StringIO(actual_output)
     actual_events = get_events(actual_output_stream)
-    actual_events = [[e[0] - 140] + e[1:] for e in actual_events[65:-1]]
+    actual_events = [[e[0] - 194] + e[1:] for e in actual_events[65:-1]]
     actual_regfile = actual_output_stream.readline().split()
     print "Expected regfile"
     print test['regfile_out']
@@ -185,7 +188,13 @@ def run_test(test):
         for i in xrange(len(run)):
             mactual[addr].append(dump[addr_n + i + 1])
     print mactual
+    success = test['regfile_out'][:-1] == actual_regfile[:-1] and test['mchanged'] == mactual
+    if success:
+        print "Pass"
+    else:
+        print "Fail"
     os.chdir("tests/fuse/testdata")
+    return success
 
 @atexit.register
 def kill_subprocess():
@@ -195,20 +204,50 @@ def kill_subprocess():
         except OSError:
             pass
 
+tests = []
+tests_by_comment = {}
+
 try:
-    tests = []
     while 1:
         tests.append(get_test())
 except StopIteration:
     pass
+
+for test in tests:
+    tests_by_comment[test['comment']] = test
 
 if not os.path.exists("testdata"):
     os.mkdir("testdata")
 
 os.chdir("testdata")
 
-if len(sys.argv) > 1:
-    run_test(tests[int(sys.argv[1])])
+if len(sys.argv) == 1:
+    run_tests = tests
 else:
-    for test in tests:
-        run_test(test)
+    test_comments = sys.argv[1:]
+    run_tests = []
+    for test_comment in test_comments:
+        if '-' in test_comment:
+            bits = test_comment.split('-')
+            for i in xrange(tests.index(tests_by_comment[bits[0]]), tests.index(tests_by_comment[bits[1]]) + 1):
+                run_tests.append(tests[i])
+        else:
+            run_tests.append(tests_by_comment[test_comment])
+
+successful_tests = []
+failed_tests = []
+test_count = len(run_tests)
+success_count = 0
+for test in run_tests:
+    if run_test(test):
+        success_count += 1
+        successful_tests.append(test['comment'])
+    else:
+        failed_tests.append(test['comment'])
+
+print "#################### Summary ####################"
+print ("%s/%s: " % (success_count, test_count)) + ("Success!" if success_count == test_count else "Failed")
+print "Sucessful"
+print successful_tests
+print "Failed"
+print failed_tests

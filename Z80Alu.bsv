@@ -7,6 +7,22 @@ import ClientServer::*;
 
 typedef Server#(AluReqT, AluRespT) ALU_ifc;
 
+Bool hc_add_tab[8] = {
+    False, True, True, True, False, False, False, True
+};
+
+Bool hc_sub_tab[8] = {
+    False, False, True, False, True, False, True, True
+};
+
+Bool of_add_tab[8] = {
+    False, False, False, True, True, False, False, False
+};
+
+Bool of_sub_tab[8] = {
+    False, True, False, False, False, False, True, False
+};
+
 module mkALU(ALU_ifc);
     FIFO#(AluRespT) f_out <- mkFIFO;
 
@@ -17,36 +33,42 @@ module mkALU(ALU_ifc);
             FlagRegT flags = req.flags_in;
             $display("ALU REQ in1: %h, in2: %h, flags: %h", in1, in2, pack(flags));
             Bit#(8) res = ?;
+            Bit#(1) carry_in = (req.cmd.carry_in && flags.carry) ? 1 : 0;
             case(req.cmd.op)
-                AluOpAdd, AluOpSub: begin
-                    if (req.cmd.op == AluOpSub)
-                        in2 = -in2;
-                    Bit#(1) carry_in = (req.cmd.carry_in && flags.carry) ? 1 : 0;
-                    Bit#(5) half_res = extend(in1[3:0]) + extend(in2[3:0]) + extend(carry_in);
-                    Bit#(8) sign_carry_in_res = extend(in1[6:0]) + extend(in2[6:0]) + extend(carry_in);
+                AluOpAdd: begin
                     Bit#(9) ext_res = extend(in1) + extend(in2) + extend(carry_in);
-                    // I really hope Bluespec and Quartus does clever expression availability and makes this one adder chain
                     res = ext_res[7:0];
-                    flags.sign = ext_res[7] > 0;
-                    flags.zero = res == 0;
-                    flags.bit5 = res[5] > 0;
-                    flags.half_carry = half_res[4] > 0;
-                    flags.bit3 = res[3] > 0;
-                    flags.parity_overflow = (sign_carry_in_res[7] ^ ext_res[8]) > 0;
-                    flags.subtract = req.cmd.op == AluOpSub;
-                    flags.carry = ext_res[8] > 0;
+                    flags.half_carry = hc_add_tab[{res[3], in2[3], in1[3]}];
+                    flags.parity_overflow = of_add_tab[{res[7], in2[7], in1[7]}];
+                    flags.carry = ext_res[8] == 1;
+                    flags.subtract = False;
                 end
-                AluOpAnd: begin
-                    res = in1 & in2;
+                AluOpSub, AluOpCp: begin
+                    Bit#(9) ext_res = extend(in1) - extend(in2) - extend(carry_in);
+                    res = ext_res[7:0];
+                    flags.half_carry = hc_sub_tab[{res[3], in2[3], in1[3]}];
+                    flags.parity_overflow = of_sub_tab[{res[7], in2[7], in1[7]}];
+                    flags.carry = ext_res[8] == 1;
+                    flags.subtract = True;
                 end
-                AluOpXor: begin
-                    res = in1 ^ in2;
-                end
-                AluOpOr: begin
-                    res = in1 | in2;
+                AluOpAnd, AluOpXor, AluOpOr: begin
+                    case(req.cmd.op)
+                        AluOpAnd: res = in1 & in2;
+                        AluOpXor: res = in1 ^ in2;
+                        AluOpOr: res = in1 | in2;
+                    endcase
+                    flags.half_carry = req.cmd.op == AluOpAnd;
+                    flags.parity_overflow = ^res == 0;
+                    flags.carry = False;
+                    flags.subtract = False;
                 end
             endcase
-            AluRespT resp = AluRespT{flags_out: flags, out: res};
+            let flag_bits = (req.cmd.op == AluOpCp) ? in2 : res;
+            flags.sign = res[7] > 0;
+            flags.zero = res == 0;
+            flags.bit5 = flag_bits[5] > 0;
+            flags.bit3 = flag_bits[3] > 0;
+            AluRespT resp = AluRespT{flags_out: flags, out: (req.cmd.op == AluOpCp) ? in1 : res};
             $display("ALU RESP out: %h flags: %h", resp.out, pack(resp.flags_out));
             f_out.enq(resp);
         endmethod

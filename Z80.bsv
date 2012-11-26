@@ -303,6 +303,25 @@ module mkZ80a(Z80a_ifc);
 
     /*** ALU ***/
 
+    rule alu_start(ifdec.inactive() && decoded.op == OpAlu8
+      &&& decoded.src2 matches tagged IndirectOperand .* &&& !m1_done);
+        dropAV(bus_man.server.response.get());
+        m1_done <= True;
+    endrule
+
+    rule alu_indirfetchstart(m1_done_nc && decoded.op == OpAlu8 &&& decoded.src2 matches tagged IndirectOperand (tagged IOReg16 .r));
+        bus_man.server.request.put(Z80BusManRqT{
+            addr: rf.read_16b(r),
+            payload: BPMemRd
+        });
+    endrule
+
+    rule alu_indirfetchend(m1_done_nc && decoded.op == OpAlu8 &&& decoded.src1 matches tagged DirectOperand (tagged DOReg8 .rd) &&& decoded.src2 matches tagged IndirectOperand (tagged IOReg16 .*));
+        let res <- bus_man.server.response.get();
+        alu.request.put(AluReqT{cmd: decoded.alu_op, in1: rf.read_8b(rd), in2: res, flags_in: unpack(rf.read_8b(RgF))});
+        next_instruction();
+    endrule
+
     rule alu1(ifdec.inactive() && decoded.op == OpAlu8
       &&& decoded.src1 matches tagged DirectOperand (tagged DOReg8 .r1)
       &&& decoded.src2 matches tagged DirectOperand (tagged DOReg8 .r2));
@@ -311,15 +330,14 @@ module mkZ80a(Z80a_ifc);
         next_instruction();
     endrule
 
-    rule alu2(ifex_overlap_cycle_1 && decoded.op == OpAlu8
-      &&& decoded.dest matches tagged DirectOperand (tagged DOReg8 .r));
+    rule alu2(ifex_overlap_cycle_1 && decoded.op == OpAlu8 &&& decoded.dest matches tagged DirectOperand (tagged DOReg8 .r));
         AluRespT resp <- alu.response.get();
         rf.write_8b(r, resp.out);
-        tmp8 <= pack(resp.flags_out);
+        res <= pack(resp.flags_out);
     endrule
 
     rule alu3(ifex_overlap_cycle_2 && decoded.op == OpAlu8);
-        rf.write_8b(RgF, tmp8);
+        rf.write_8b(RgF, res);
     endrule
 
     /*** Interrupts ***/

@@ -73,18 +73,18 @@ typedef struct {
 } DecodedInstructionT deriving (Bits, Eq, Bounded);
 
 typedef struct {
-    Bool sign;
-    Bool zero;
+    Bool sign; // S
+    Bool zero; // Z
     Bool bit5;
-    Bool half_carry;
+    Bool half_carry; // H
     Bool bit3;
-    Bool parity_overflow;
-    Bool subtract;
-    Bool carry;
+    Bool parity_overflow; // P/V
+    Bool subtract; // N
+    Bool carry; // C
 } FlagRegT deriving (Bits, Eq, Bounded);
 
 typedef enum {
-    AluOpNop, AluOpAdd, AluOpSub, AluOpAnd, AluOpXor, AluOpOr
+    AluOpNop, AluOpAdd, AluOpSub, AluOpAnd, AluOpXor, AluOpOr, AluOpCp
 } AluOpT deriving (Bits, Eq, Bounded);
 
 typedef struct {
@@ -248,6 +248,7 @@ instance FShow#(AluOpT);
             AluOpAnd: return $format("AluOpAnd");
             AluOpXor: return $format("AluOpXor");
             AluOpOr: return $format("AluOpOr");
+            AluOpCp: return $format("AluOpCp");
         endcase
     endfunction
 endinstance

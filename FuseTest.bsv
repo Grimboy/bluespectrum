@@ -10,6 +10,7 @@ import Probe::*;
 
 module mkFuseTest(Empty);
     Reg#(UInt#(64)) cycle <- mkReg(0);
+    Reg#(Bool) halted <- mkReg(False);
 
     Z80a_ifc cpu <- mkZ80a();
     TestDRAM_ifc dram <- mkTestDRAM("testinit.rmh", "testprog.rmh");
@@ -62,12 +63,13 @@ module mkFuseTest(Empty);
 
     rule memdump_on_halt(cpu.n_halt() == 0);
         dram.dump();
+        halted <= True;
     endrule
 
-    //rule finished(cycle > 200);
-        //$display("Test timed out after 200 cycles");
-        //$finish(-1);
-    //endrule
+    rule finished(cycle > 2000 && !halted);
+        $display("Test timed out after 2000 cycles");
+        $finish(-1);
+    endrule
 endmodule
 
 endpackage

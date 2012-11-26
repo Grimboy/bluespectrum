@@ -13,6 +13,14 @@ import StmtUtils::*;
 
 `define INIT_SIZE 56
 
+/*
+Should do this rather than HALT hack.
+typedef union tagged {
+    Bit#(8) DataByte;
+    Bit#(8) ExeByte;
+} ExeTagByteT deriving (Bits, Eq, Bounded);
+*/
+
 interface TestDRAM_ifc;
     method Action dump();
 

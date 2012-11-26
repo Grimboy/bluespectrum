@@ -34,7 +34,7 @@ AluCmdT tab_alu[8] = {
     AluCmdT{op: AluOpAnd, carry_in: False},
     AluCmdT{op: AluOpXor, carry_in: False},
     AluCmdT{op: AluOpOr, carry_in: False},
-    AluCmdT{op: AluOpSub, carry_in: False}
+    AluCmdT{op: AluOpCp, carry_in: False}
 };
 
 /*
@@ -132,7 +132,7 @@ function DecodedInstructionT decode_simple(Bit#(8) inst, IncompleteInstructionT 
             else
                 return DecodedInstructionT{op: OpLd8, alu_op: nop_cmd, dest: tab_r[y], src1: tab_r[z], src2: tagged NoOperand, need_displacement: False, incomp: IncNo}; // LD r[y], r[z]
             2: begin 
-                return DecodedInstructionT{op: OpAlu8, alu_op: tab_alu[y], dest: y == 7 ? tagged NoOperand : tagged DirectOperand (tagged DOReg8 RgA), src1: tagged DirectOperand (tagged DOReg8 RgA), src2: tab_r[z], need_displacement: False, incomp: IncNo}; // alu[y] r[z]
+                return DecodedInstructionT{op: OpAlu8, alu_op: tab_alu[y], dest: tagged DirectOperand (tagged DOReg8 RgA), src1: tagged DirectOperand (tagged DOReg8 RgA), src2: tab_r[z], need_displacement: False, incomp: IncNo}; // alu[y] r[z]
             end
             3: case(z)
                 0: return DecodedInstructionT{op: OpNop, alu_op: nop_cmd, dest: tagged NoOperand, src1: tagged NoOperand, src2: tagged NoOperand, need_displacement: False, incomp: IncNo}; // XXX: Unimplemented // RET cc[y]

@@ -1,0 +1,35 @@
+[*]
+[*] GTKWave Analyzer v3.3.40 (w)1999-2012 BSI
+[*] Mon Nov 26 15:14:48 2012
+[*]
+[dumpfile] "/home/grimboy/partii_project/src/dump.vcd"
+[dumpfile_mtime] "Mon Nov 26 15:14:19 2012"
+[dumpfile_size] 226209792
+[savefile] "/home/grimboy/partii_project/src/dump_displaygenerator.gtkw"
+[timestart] 5
+[size] 1918 1059
+[pos] -1 -1
+*-9.000000 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+[treeopen] main.
+[treeopen] main.top.
+[treeopen] main.top.palgen.
+[sst_width] 232
+[signals_width] 147
+[sst_expanded] 1
+[sst_vpaned_height] 312
+@28
+main.top.palgen.red
+main.top.palgen.blue
+main.top.palgen.green
+main.top.palgen.n_hl
+main.top.palgen.n_sync
+@22
+main.top.palgen.pal_col[8:0]
+main.top.palgen.pal_line[8:0]
+@201
+-pal2fb
+@22
+main.top.pal2fb.pal_col[9:0]
+main.top.pal2fb.pal_line[9:0]
+[pattern_trace] 1
+[pattern_trace] 0

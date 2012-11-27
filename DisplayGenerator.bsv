@@ -106,7 +106,7 @@ module mkPALGenerator(PALGenerator_ifc);
     endrule
 
     method Bit#(1) n_hl();
-        return attr_byte.hl ? 0 : 1;
+        return (pal_line < 192 && pal_col < 256 && attr_byte.hl) ? 0 : 1;
     endmethod
 
     method Bit#(1) red();

@@ -36,7 +36,7 @@ interface PALGenerator_ifc;
     method Bit#(1) n_sync();
 endinterface
 
-ZXRGB border = ZXRGB{r: 1, g: 1, b: 1};
+ZXRGB border = ZXRGB{r: 1, g: 0, b: 0};
 
 (* synthesize *)
 module mkPALGenerator(PALGenerator_ifc);
@@ -136,8 +136,8 @@ module mkPALGenerator(PALGenerator_ifc);
     endmethod
 endmodule
 
-`define WIDTH 320
-`define HEIGHT 248
+`define WIDTH 352
+`define HEIGHT 302
 `define AREA (WIDTH * HEIGHT)
 
 (* always_ready, always_enabled *)
@@ -249,11 +249,11 @@ module mkPAL2Framebuffer(PAL2Framebuffer_ifc);
 
     rule end_line_or_screen(n_sync_w == 1 && sync_length >= 30);
         if (sync_length >= 448) begin
-            pal_line <= -60;
-            pal_col <= -79;
+            pal_line <= -5;
+            pal_col <= -48;
         end else begin
             pal_line <= pal_line + 1;
-            pal_col <= -79;
+            pal_col <= -48;
         end
     endrule
 
